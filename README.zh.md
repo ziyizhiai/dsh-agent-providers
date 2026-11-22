@@ -25,6 +25,33 @@ Composer 下方还有一条 **Agent 会话** 栏（默认收起，点"管理"展
 
 ---
 
+## 支持的 agent
+
+下面每一条都是在装好的 agent 上实测的，不是照 README 抄的。
+
+| Agent | 命令 | 会话 | 模型选择 | 凭据 |
+|---|---|---|---|---|
+| **OpenCode** 1.19.6 | `opencode acp` | list / fork / resume / close | 账号下的 44 个，探测得到 | 凭据**文档**（`OPENCODE_AUTH_CONTENT`） |
+| **Claude Code**（`claude-agent-acp` 0.109.1） | `claude-agent-acp` | list / fork / resume / close / **delete** / title | `default` `opus` `fable` `sonnet` `haiku`；另有 `effort`、`fast`、`ultracode`、`mode` | `ANTHROPIC_API_KEY`，不需要登录调用 |
+| **Codex**（`codex-acp` 2.9.0） | `codex-acp` | list / fork / resume / close / delete / title | 账号相关（实测 11 个），**登录后才有** | ACP `authenticate` 的 `api-key` |
+
+三个都支持图片输入。其它 ACP agent 把字段写全就能用。
+
+```yaml
+agents:
+  opencode-go: { preset: opencode, displayName: OpenCode Go, defaultContextWindow: 1000000, catalog: probe }
+  claude:      { preset: claude-code, displayName: Claude Code }
+  codex:       { preset: codex, displayName: Codex }
+```
+
+`preset: codex` 里的登录请求形状是照它源码读的（`_meta["api-key"].apiKey`），凭据取
+`OPENAI_API_KEY`。
+
+> 如果一个 agent 要先有会话才能列模型、又要先登录才能建会话，它会呈现一个空分组——
+> 没东西可选，就永远走不到那句解释登录的报错。这种路由会先挂一个占位模型
+> （`default`，带 `需要登录` 标签），等真目录能读到再替换。
+> 用 `fallbackModel: { id, name }` 改名，或 `fallbackModel: false` 保持空分组。
+
 ## 安装与卸载
 
 ### 安装（作为 bundle）
@@ -215,7 +242,7 @@ lib/
     ├── cli.js             配置驱动的一次性 CLI 实现（给没有 ACP 的 agent）
     └── index.js           工厂 + 凭据注入
 docs/transport-contract.md  ★ 再接入一个 agent 要写多少代码
-test/                       87 个测试（真 ACP agent + 真 CLI + 纯函数）
+test/                       100 个测试（真 ACP agent + 真 CLI + 纯函数）
 ```
 
 **适配器不认识协议**：ACP、CLI 的差异全部挡在 `transport/` 后面。
@@ -240,6 +267,9 @@ test/                       87 个测试（真 ACP agent + 真 CLI + 纯函数�
 | `idleReleaseMs` | 600000 | 热进程空闲多久回收 |
 | `showToolActivity` | `true` | 把 agent 的工具活动写成 reasoning 里的 `→ Read src/app.ts` |
 | `catalog` | `auto` | `auto`：`models` 为空时探测，否则用声明表；`probe`：总是探测，声明表当作**元数据覆盖**；`declared`：不探测 |
+| `auth` | — | `{ methodId, ref, params }`，给"不登录就拒绝 `session/new`"的 agent；`params` 里的 `{value}` 会被替换成凭据 |
+| `configOptions` | `{}` | 建/载会话后应用的会话配置，按选项 id：`{ effort: high, mode: plan }` |
+| `fallbackModel` | `true` | 目录读不出来时挂的占位模型 |
 | `models` | `[]` | 模型表 / 覆盖项：`{ id, name?, contextWindow?, maxTokens? }` |
 | `defaultContextWindow` | `200000` | 未单独声明的模型使用的上下文窗口（见下） |
 | `badgeText` | `Agent` | 模型选择器里跟在模型名后面的小标签文字 |
@@ -366,7 +396,7 @@ DSH 的 turn 立刻收尾，不会出现"外部还在干、DSH 在等下一步"�
 
 ```bash
 npm run link   # 把本机已装的 DSH 包软链进来（只为跑测试）
-npm test       # 87 个测试，~3s
+npm test       # 100 个测试，~4s
 ```
 
 覆盖：
@@ -407,6 +437,8 @@ npm test       # 87 个测试，~3s
 | `session/fork` + 重绑定 | ✅ `ses_…SwCm → ses_…EpBI`，两个会话都在 agent store 里，分支继承历史后续聊成功 |
 | 套餐未开通的模型 | ✅ 报 `Model access is disabled`，目录里该模型变成 `无权限` 警告标签，健康的模型仍是 `Agent` |
 | 图片（走 adapter 的附件通道） | ✅ 让模型读用户那张截图，回答 `10.1K / 200K` |
+| Claude Code：握手 → 目录 → 选模型 → 推理 | ✅ 5 个模型 id、`delete` 能力，坏密钥会把 agent 自己的 HTTP 403 原样抛出 |
+| Codex：ACP `authenticate` → 目录 | ✅ 登录**之后**才出现 11 个账号模型，说明 `_meta` 形状是对的 |
 | 面板 HTTP（fork/close/delete/未知动作/跨站） | ✅ 200 / 403 / 400 / 404 都符合预期 |
 
 ### 端到端验证（严格条件）
@@ -490,6 +522,8 @@ dsh-agent-providers/
 | `probe-fork.mjs` | 真实 `session/fork` + 重绑定 + 分支续聊 |
 | `probe-extras.mjs` | 套餐拒绝的模型标签、图片走 adapter 通道 |
 | `probe-vision.mjs <image>` | 用多模态模型读一张图（当前会话模型不支持图像时用） |
+| `probe-agent.mjs <command> [args…]` | 描述任意 ACP agent：能力、会话选项、模式、会话存储 |
+| `probe-agents.mjs [preset…]` | 把 Claude Code / Codex 预设端到端跑一遍 |
 | `probe-context.mjs` | 读线上 profile，打印解析后的窗口 / 模态 / badge |
 
 ## 风险

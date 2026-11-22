@@ -668,6 +668,25 @@ stderr 尾部，因为这类失败在浏览器里只剩一句错误。
 | 变更记录 | `CHANGELOG.md` |
 | 刻意不做 | `README.i18n.yaml`：官方仓库里它是 `verify-translation-pairing` 生成的标题哈希记录，手写只会像样但不可信，已写进 README 的发布待办说明原因 |
 
+### 第九轮：把 Claude Code 和 Codex 真正装起来做完
+
+安装：`@agentclientprotocol/claude-agent-acp@0.109.1`、`@agentclientprotocol/codex-acp@2.9.0`
+（后者自带 `@openai/codex`，前者自带 `@anthropic-ai/claude-agent-sdk`）。新增
+`probe/probe-agent.mjs`（描述任意 ACP agent）和 `probe/probe-agents.mjs`（端到端跑预设）。
+
+实测量到的差异，全部落进代码：
+
+| 发现 | 处理 |
+|---|---|
+| **Codex 不给 `session/new`**（`-32000 Authentication required`），即使 `OPENAI_API_KEY` 已在环境里 | 实现 ACP `authenticate`：`auth: { methodId, ref, params }`，`params` 里的 `{value}` 用凭据填充。Codex 读的是 `_meta["api-key"].apiKey`（照它源码） |
+| **Codex 的模型列表是账号相关的，登录后才有** | 预设用 `catalog: probe`；新增 `fallbackModel`：目录读不出来时挂一个 `default` 占位模型，否则分组为空、选不到模型、永远触不到登录报错 |
+| Claude 的模型值是 CLI 别名而非完整 id | 预设按实测写：`default/opus/sonnet/haiku/fable` |
+| Claude 有 `effort`/`fast`/`ultracode`/`mode` 四个选项；`modes` 既有 configOption 又有遗留块 | 加 `configOptions` 配置（按 id 应用）和 `session/set_mode` 回退 |
+| Claude 有 `sessionCapabilities.delete`，Codex 也有 | 能力表已经按 agent 广告来，删除按钮自动出现 |
+| Claude 的 `fork` 广告了但对刚建的会话回 `-32002 Resource not found` | 记为已知：能力广告 ≠ 一定可用；面板会把这个错误原样显示 |
+| **schema 会把 `auth` 物化成 `{}`、把 `command` 物化成 `''`** | `mergePreset` 把空字符串也算"未设置"；只有 `methodId` 是字符串时才当作配置了登录。这就是当初 `args: []` 那个坑的同类 |
+| Claude 走这台机器的网络被 Anthropic 挡（HTTP 403 区域限制） | 不是插件问题；错误原样透出。结构上已验证到"选模型 → 推理 → agent 报错" |
+
 ### 一次被纠正的错误结论
 
 M2 第一次收尾时我判断"opencode 自己的网关连不上，与插件无关"——**这个结论是错的**。

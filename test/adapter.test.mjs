@@ -106,6 +106,35 @@ test('the route default window applies to every model it serves', async () => {
   assert.equal(probed.context.contextWindow, 1_000_000, 'probe-only models get it too')
 })
 
+test('an unreadable catalogue still yields a selectable model', async () => {
+  // An agent that needs a session to list models, and a session only after
+  // signing in, cannot advertise anything yet. An empty group would leave no way
+  // to select a model and therefore no way to reach the sign-in error.
+  const { adapter } = makeAdapter({
+    catalog: 'probe',
+    command: '/nonexistent/agent',
+    displayName: 'Locked Agent',
+  })
+  const models = await adapter.listModels('fake')
+  assert.equal(models.length, 1)
+  assert.equal(models[0].id, 'default')
+  assert.match(models[0].name, /sign-in required/)
+  assert.deepEqual(models[0].badge, { text: { en: 'sign-in required', zh: '需要登录' }, tone: 'warning' })
+})
+
+test('the fallback model can be turned off or renamed', async () => {
+  const { adapter } = makeAdapter({ catalog: 'probe', command: '/nonexistent/agent', fallbackModel: false })
+  assert.deepEqual(await adapter.listModels('fake'), [], 'no placeholder when the profile opts out')
+
+  const { adapter: named } = makeAdapter({
+    catalog: 'probe',
+    command: '/nonexistent/agent',
+    fallbackModel: { id: 'gpt-x', name: 'Pick me' },
+  })
+  const models = await named.listModels('fake')
+  assert.deepEqual(models.map((model) => [model.id, model.name]), [['gpt-x', 'Pick me']])
+})
+
 test('catalog: probe keeps the agent catalogue and applies declared overrides', async () => {
   const { adapter } = makeAdapter({
     catalog: 'probe',

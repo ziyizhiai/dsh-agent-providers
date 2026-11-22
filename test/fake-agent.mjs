@@ -29,6 +29,7 @@ const SUPPORTS_LOAD = process.env.FAKE_ACP_NO_LOAD !== '1'
 let currentModel = 'fake/opus'
 let currentMode = 'build'
 let sessionCounter = 0
+let authenticated = false
 const sessions = new Map()
 
 function write(message) {
@@ -40,10 +41,23 @@ const fail = (id, code, message) => write({ id, error: { code, message } })
 const notify = (method, params) => write({ method, params })
 
 function configOptions() {
-  return [
+  const options = [
     { id: 'model', name: 'Model', type: 'select', category: 'model', currentValue: currentModel, options: MODEL_OPTIONS },
-    { id: 'mode', name: 'Session Mode', type: 'select', category: 'mode', currentValue: currentMode, options: MODE_OPTIONS },
+    { id: 'effort', name: 'Effort', type: 'select', category: 'thought_level', currentValue: 'default', options: [{ value: 'default', name: 'default' }, { value: 'high', name: 'high' }] },
   ]
+  // `FAKE_ACP_LEGACY_MODE=1` publishes modes only in the legacy block, which is
+  // what Claude Code does; otherwise they appear as a config option too.
+  if (process.env.FAKE_ACP_LEGACY_MODE !== '1') {
+    options.push({ id: 'mode', name: 'Session Mode', type: 'select', category: 'mode', currentValue: currentMode, options: MODE_OPTIONS })
+  }
+  return options
+}
+
+/** `FAKE_ACP_CONFIG=<path>` appends one JSON line per applied configuration. */
+function recordConfig(entry) {
+  if (process.env.FAKE_ACP_CONFIG !== undefined) {
+    appendFileSync(process.env.FAKE_ACP_CONFIG, `${JSON.stringify(entry)}\n`)
+  }
 }
 
 function update(sessionId, payload) {
@@ -111,16 +125,49 @@ function handle(request) {
           sessionCapabilities: { list: {}, fork: {}, resume: {}, close: {}, delete: {} },
           promptCapabilities: { image: true, embeddedContext: true },
         },
-        authMethods: [{ id: 'fake-login', name: 'Fake login' }],
+        // A mode where the agent refuses sessions until `authenticate`, which is
+        // how Codex behaves; otherwise it advertises nothing and is left alone.
+        authMethods: process.env.FAKE_ACP_AUTH === '1'
+          ? [{ id: 'api-key', name: 'API Key' }]
+          : [{ id: 'fake-login', name: 'Fake login' }],
         agentInfo: { name: 'Fake Agent', version: '1.0.0' },
       })
       return
 
+    case 'authenticate':
+      if (process.env.FAKE_ACP_AUTH === '1') {
+        const supplied = params?._meta?.['api-key']?.apiKey
+        if (typeof supplied !== 'string' || supplied.length === 0) {
+          fail(id, -32602, 'authenticate: missing _meta["api-key"].apiKey')
+          return
+        }
+        authenticated = true
+      }
+      respond(id, {})
+      return
+
     case 'session/new': {
+      if (process.env.FAKE_ACP_AUTH === '1' && !authenticated) {
+        // The shape Codex uses: refuse until the client signs in.
+        fail(id, -32000, 'Authentication required')
+        return
+      }
       sessionCounter += 1
       const sessionId = `fake-session-${sessionCounter}`
       sessions.set(sessionId, { cwd: params?.cwd, model: currentModel })
-      respond(id, { sessionId, configOptions: configOptions() })
+      respond(id, {
+        sessionId,
+        configOptions: configOptions(),
+        // Legacy mode block, still published beside config options by some agents.
+        modes: {
+          currentModeId: 'auto',
+          availableModes: [
+            { id: 'default', name: 'Manual' },
+            { id: 'plan', name: 'Plan' },
+            { id: 'auto', name: 'Auto' },
+          ],
+        },
+      })
       return
     }
 
@@ -148,7 +195,14 @@ function handle(request) {
       })
       return
 
+    case 'session/set_mode': {
+      recordConfig({ method: 'session/set_mode', modeId: params?.modeId })
+      respond(id, {})
+      return
+    }
+
     case 'session/set_config_option': {
+      recordConfig({ method: 'session/set_config_option', configId: params?.configId, value: params?.value })
       if (params?.configId === 'model') {
         if (!MODEL_OPTIONS.some((option) => option.value === params.value)) {
           fail(id, -32602, `unknown model ${params.value}`)

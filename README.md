@@ -20,6 +20,35 @@ opencode                 ← already there
 A strip under the composer also lists the agent's stored conversations and marks the one the
 open conversation is bound to.
 
+## Supported agents
+
+Everything below was measured against the installed agent, not read from a README.
+
+| Agent | Command | Sessions | Model choice | Credential |
+|---|---|---|---|---|
+| **OpenCode** 1.19.6 | `opencode acp` | list, fork, resume, close | 44 from the account, discovered | credential **document** (`OPENCODE_AUTH_CONTENT`) |
+| **Claude Code** (`claude-agent-acp` 0.109.1) | `claude-agent-acp` | list, fork, resume, close, **delete**, title | `default` `opus` `fable` `sonnet` `haiku`; options `effort`, `fast`, `ultracode`, `mode` | `ANTHROPIC_API_KEY`, no sign-in call |
+| **Codex** (`codex-acp` 2.9.0) | `codex-acp` | list, fork, resume, close, delete, title | account-derived (11 seen), only after sign-in | ACP `authenticate` with `api-key` |
+
+All three accept image prompts. Anything else that speaks ACP works by writing the fields out.
+
+```yaml
+agents:
+  opencode-go: { preset: opencode, displayName: OpenCode Go, defaultContextWindow: 1000000, catalog: probe }
+  claude:      { preset: claude-code, displayName: Claude Code }
+  codex:       { preset: codex, displayName: Codex }
+```
+
+`preset: codex` ships the sign-in request its source actually reads
+(`_meta["api-key"].apiKey`); the credential comes from `OPENAI_API_KEY`.
+
+> An agent that needs a session to list models, and a session only after signing
+> in, would otherwise advertise an empty group — nothing to select, so no way to
+> reach the message explaining the sign-in. Such a route advertises one
+> placeholder model (`default`, badge *sign-in required*) until the real
+> catalogue can be read. Rename it with `fallbackModel: { id, name }`, or set
+> `fallbackModel: false` to keep the group empty.
+
 ## Install and uninstall
 
 ### Install
@@ -205,6 +234,9 @@ models:
 | `connectTimeoutMs` | 120000 | spawn + initialize + session creation bound |
 | `idleReleaseMs` | 600000 | release a warm process after this idle |
 | `catalog` | `auto` | `auto` / `probe` (probe + overrides) / `declared` |
+| `auth` | — | `{ methodId, ref, params }` for an agent that refuses `session/new` until `authenticate`; `{value}` in `params` is the credential |
+| `configOptions` | `{}` | session configuration applied after create/load, by option id: `{ effort: high, mode: plan }` |
+| `fallbackModel` | `true` | the placeholder a route advertises while its catalogue is unreadable |
 | `models` | `[]` | model table / overrides |
 | `defaultContextWindow` | `200000` | window for models that declare none |
 | `defaultMaxTokens` | — | output cap for models that declare none |
@@ -258,7 +290,7 @@ There is no vendor-specific branch in the plugin — a different agent just need
 ## Verification
 
 ```bash
-npm test        # 92 tests, ~3s
+npm test        # 100 tests, ~4s
 ```
 
 Coverage: transport conformance (one suite runs against ACP and CLI), the adapter (chunk pairing,
@@ -279,6 +311,8 @@ process, so the protocol layer is not mocked.
 | `session/fork` + rebind | ✅ new session, both in the agent store, branch inherits history |
 | A model the plan denies | ✅ `Model access is disabled`, catalogue marks it `no access` |
 | An image through the adapter | ✅ the model read the screenshot |
+| Claude Code: handshake → catalogue → model selection → prompt | ✅ 5 model ids, `delete` advertised, a bad key reports the agent's own HTTP 403 verbatim |
+| Codex: ACP `authenticate` → catalogue | ✅ 11 account models appeared **only after** signing in, so the `_meta` shape is right |
 | Panel HTTP (fork/close/delete/unknown/cross-site) | ✅ 200 / 200 / 200 / 404 / 403 |
 
 ## Repository layout
@@ -291,7 +325,7 @@ dsh-agent-providers/
 ├── locale/               # meta.title / meta.description / meta.detail per language
 ├── lib/                  # runtime code
 ├── docs/                 # DETAIL pages, preview, transport contract, research notes
-├── test/                 # 92 tests, runs in CI
+├── test/                 # 100 tests, runs in CI
 ├── probe/                # live verification scripts (not published)
 ├── scripts/link-dsh.mjs  # dev-only: link an installed DSH
 └── .github/workflows/ci.yml
@@ -309,6 +343,8 @@ dsh-agent-providers/
 | `probe-fork.mjs` | real `session/fork` + rebind + continuation |
 | `probe-extras.mjs` | denied-model badge and images through the adapter |
 | `probe-vision.mjs <image>` | read an image with a multimodal model |
+| `probe-agent.mjs <command> [args…]` | describe any ACP agent: capabilities, session options, modes, store |
+| `probe-agents.mjs [preset…]` | drive the Claude Code / Codex presets end to end |
 | `probe-context.mjs` | read the live profile, print resolved window / modalities / badge |
 
 ## Before publishing

@@ -31,6 +31,39 @@ test('the documented opencode MVP section validates', () => {
   assert.equal(profile.command, 'opencode')
 })
 
+test('a preset alone survives schema materialization', () => {
+  // The schema materializes absent fields (`args: []`, `command: ''`, `auth: {}`).
+  // Treating those as "the profile said something" erases the preset — the bug
+  // that once started OpenCode's TUI instead of its ACP server.
+  for (const preset of ['opencode', 'claude-code', 'codex']) {
+    const config = new Config({ agents: { a: { preset } } })
+    const profile = resolveAgent('a', config.agents.get().a)
+    assert.notEqual(profile.command, '', `${preset} keeps its command`)
+    assert.equal(profile.displayName.length > 0, true, `${preset} keeps its display name`)
+  }
+
+  const claudeEntry = new Config({ agents: { a: { preset: 'claude-code' } } }).agents.get().a
+  const claude = resolveAgent('a', claudeEntry)
+  assert.deepEqual(claude.models.map((model) => model.id), ['default', 'opus', 'sonnet', 'haiku', 'fable'],
+    'the Claude model aliases its agent publishes')
+  assert.equal(claude.auth, undefined, 'no sign-in call for an agent that needs none')
+
+  const codexEntry = new Config({ agents: { a: { preset: 'codex' } } }).agents.get().a
+  const codex = resolveAgent('a', codexEntry)
+  assert.equal(codex.auth.methodId, 'api-key')
+  assert.deepEqual(codex.auth.params, { _meta: { 'api-key': { apiKey: '{value}' } } })
+  assert.equal(codex.catalog, 'probe', 'the model list only exists after signing in')
+})
+
+test('a profile override still wins over the preset', () => {
+  const config = new Config({
+    agents: { a: { preset: 'codex', command: '/opt/custom-codex', displayName: 'Mine' } },
+  })
+  const profile = resolveAgent('a', config.agents.get().a)
+  assert.equal(profile.command, '/opt/custom-codex')
+  assert.equal(profile.displayName, 'Mine')
+})
+
 test('a preset expands to a runnable backend', () => {
   const profile = resolveAgent('opencode-go', { preset: 'opencode' })
   assert.equal(profile.transport, 'acp')

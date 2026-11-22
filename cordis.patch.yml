@@ -1,0 +1,20 @@
+# Bundle patch for `dsh-agent-providers`.
+#
+# Composed into a profile after the base layers. The row below installs one
+# LLM adapter that owns one provider route per entry of `config.agents`.
+#
+# Profile layer example (put the real values in YOUR profile's
+# cordis.patch.yml, not here):
+#
+#   - id: llm-agent-providers
+#     name: dsh-agent-providers
+#     config:
+#       agents:
+#         claude:
+#           displayName: Claude Code
+#           command: npx
+#           args: ['-y', '@agentclientprotocol/claude-agent-acp']
+#           models: [...]
+- insert:
+    - id: llm-agent-providers
+      name: dsh-agent-providers

@@ -1,0 +1,94 @@
+{
+  "name": "dsh-agent-providers",
+  "version": "0.1.0",
+  "description": "Expose third-party coding agents (OpenCode, Claude Code, Codex, any ACP agent) as DeepSeek Harness model-provider groups, with session management",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "locale/*.json",
+    "cordis.patch.yml",
+    "docs/DETAIL.md",
+    "docs/DETAIL.zh.md",
+    "docs/preview.svg",
+    "docs/transport-contract.md",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "icon.svg"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "llm",
+    "provider",
+    "acp",
+    "agent",
+    "opencode",
+    "claude-code",
+    "codex"
+  ],
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.2-rc.3 <0.3.0-0"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-settings": "^0.2.2-rc.3",
+    "@deepseek-ai/schemastery": "^3.19.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "link": "node scripts/link-dsh.mjs",
+    "probe:acp": "node probe/probe-acp.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ziyizhiai/dsh-agent-providers.git"
+  },
+  "homepage": "https://github.com/ziyizhiai/dsh-agent-providers#readme",
+  "bugs": {
+    "url": "https://github.com/ziyizhiai/dsh-agent-providers/issues"
+  },
+  "devDependencies": {
+    "@agentclientprotocol/sdk": "1.4.0",
+    "@deepseek-ai/dsh-brand": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-credentials": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-settings": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
+    "@deepseek-ai/schemastery": "~3.19.0"
+  },
+  "icon": "./icon.svg",
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "ziyizhiai"
+}

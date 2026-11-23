@@ -1,7 +1,7 @@
 {
   "name": "dsh-agent-providers",
   "version": "0.1.0",
-  "description": "Expose third-party coding agents (OpenCode, Claude Code, Codex, any ACP agent) as DeepSeek Harness model-provider groups, with session management",
+  "description": "Expose third-party coding agents (OpenCode, Claude Code, Codex, TRAE CLI, any ACP agent) as DeepSeek Harness model-provider groups, with session management",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -38,18 +38,20 @@
     "agent",
     "opencode",
     "claude-code",
-    "codex"
+    "codex",
+    "trae",
+    "traex"
   ],
   "engines": {
     "node": ">=22",
-    "dsh": ">=0.2.2-rc.3 <0.3.0-0"
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm": "^0.2.2-rc.3",
-    "@deepseek-ai/dsh-settings": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-llm": "^0.2.2-rc.1",
+    "@deepseek-ai/dsh-settings": "^0.2.2-rc.1",
     "@deepseek-ai/schemastery": "^3.19.0"
   },
   "dsh": {

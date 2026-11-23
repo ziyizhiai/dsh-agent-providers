@@ -54,6 +54,7 @@ function makeAdapter(raw = {}, extra = {}) {
     resolveCwd: () => dir,
     credentials: { resolve: async () => ({ value: 'test-secret' }) },
     ...(extra.readImage === undefined ? {} : { readImage: extra.readImage }),
+    ...(extra.askApproval === undefined ? {} : { askApproval: extra.askApproval }),
     logger: { error: () => {} },
   })
   built.push(adapter)
@@ -186,6 +187,110 @@ test('a window the agent reports for itself overrides the route default', async 
     1_000_000,
     'the agent measured 1M and that now outranks the default',
   )
+})
+
+test('a catalogue window stands in until the agent measures one', async () => {
+  const { adapter, sid } = makeAdapter({
+    models: [],
+    contextWindowMetaPath: 'trae.contextWindow',
+    defaultContextWindow: 200_000,
+  })
+  const models = await adapter.listModels('fake')
+  assert.deepEqual(models.map((model) => model.id), ['fake/opus', 'fake/sonnet', 'fake/haiku'])
+  assert.equal((await adapter.resolveModel('fake', 'fake/opus')).context.contextWindow, 475_000,
+    'the window the catalogue advertises outranks the route default')
+  assert.equal((await adapter.resolveModel('fake', 'fake/haiku')).context.contextWindow, 116_000,
+    'each model keeps its own advertised window')
+
+  // The fake agent's usage_update says 1M: a measurement outranks the catalogue,
+  // which can be stale by the time the agent answers.
+  await turn(adapter, sid, [user('report your window')])
+  assert.equal((await adapter.resolveModel('fake', 'fake/opus')).context.contextWindow, 1_000_000,
+    'a measured window outranks the advertised one')
+})
+
+test('a CLI catalogue window reaches metering without the picker', async () => {
+  // A headless turn resolves the model before anything lists models, and a CLI
+  // route has no `contextWindowMetaPath` to point at, so its live catalogue is
+  // the only place the real window exists. The 500k route default is deliberately
+  // unlike both catalogue windows, so each assertion proves the catalogue won.
+  const catalogueCli = {
+    promptVia: 'arg',
+    catalogCommand: [process.execPath, CLI, '--catalog-models'],
+    catalogJson: { entries: 'models', id: 'id', contextWindow: 'context_length' },
+    jsonl: { text: 'message.content' },
+  }
+  const { adapter } = makeAdapter({
+    transport: 'cli',
+    format: 'jsonl',
+    args: [CLI],
+    models: [],
+    defaultContextWindow: 500_000,
+    cli: catalogueCli,
+  })
+  assert.equal(
+    (await adapter.resolveModel('fake', 'fast')).context.contextWindow,
+    64_000,
+    'the live catalogue window outranks the 500k route default',
+  )
+  assert.equal(
+    (await adapter.resolveModel('fake', 'deep')).context.contextWindow,
+    200_000,
+    'each catalogue entry keeps its own window',
+  )
+  assert.equal(
+    (await adapter.resolveModel('fake', 'unknown')).context.contextWindow,
+    500_000,
+    'a model the catalogue does not list still takes the route default',
+  )
+
+  // Hydration is keyed to a recipe that can actually publish a window: a CLI
+  // route with no catalogue command keeps the plain default (the 200k value the
+  // catalogue route metered at before this fix) and must not start spawning.
+  const { adapter: declaredOnly } = makeAdapter({
+    transport: 'cli',
+    format: 'jsonl',
+    args: [CLI],
+    models: [],
+    cli: { promptVia: 'arg', jsonl: { text: 'message.content' } },
+  })
+  assert.equal((await declaredOnly.resolveModel('fake', 'fast')).context.contextWindow, 200_000,
+    'a CLI route without a catalogue command keeps the default window')
+
+  // A catalogue that fails must not fail metering: hydrate swallows it, exactly
+  // as listModels falls back to its placeholder catalogue.
+  process.env.FAKE_CLI_CATALOG_MODE = 'error'
+  try {
+    const { adapter: broken } = makeAdapter({
+      transport: 'cli',
+      format: 'jsonl',
+      args: [CLI],
+      models: [],
+      cli: catalogueCli,
+    })
+    assert.equal((await broken.resolveModel('fake', 'fast')).context.contextWindow, 200_000,
+      'an unreadable catalogue falls back instead of failing the resolve')
+  } finally {
+    delete process.env.FAKE_CLI_CATALOG_MODE
+  }
+})
+
+test('a declared window still wins over the catalogue and a measurement', async () => {
+  const { adapter, sid } = makeAdapter({
+    catalog: 'probe',
+    models: [{ id: 'fake/opus', name: 'Fake Opus', contextWindow: 300_000 }],
+    contextWindowMetaPath: 'trae.contextWindow',
+  })
+  await adapter.listModels('fake')
+  assert.equal((await adapter.resolveModel('fake', 'fake/opus')).context.contextWindow, 300_000,
+    'an explicit per-model pin outranks what the agent advertises')
+  assert.equal((await adapter.resolveModel('fake', 'fake/sonnet')).context.contextWindow, 200_000,
+    'an undeclared model takes its advertised window')
+  await turn(adapter, sid, [user('measure yourself')])
+  assert.equal((await adapter.resolveModel('fake', 'fake/opus')).context.contextWindow, 300_000,
+    'the pin also outranks a measurement')
+  assert.equal((await adapter.resolveModel('fake', 'fake/sonnet')).context.contextWindow, 200_000,
+    'a measurement of one model does not leak onto another')
 })
 
 test('probes the agent for its catalogue and caches it', async () => {
@@ -502,4 +607,148 @@ test('a missing credential names the reference instead of leaking or guessing', 
     turn(adapter, newSession(), [user('x')]),
     /needs credential "SOME_MISSING_REF"/,
   )
+})
+
+test('approvalFor exists only for ask routes with a host approval channel', async () => {
+  const seen = []
+  const ask = async (request) => {
+    seen.push(request)
+    return 'allowed-once'
+  }
+  const asking = makeAdapter({ permission: 'ask' }, { askApproval: ask })
+  const handler = asking.adapter.approvalFor({ sessionId: 'session-9' }, asking.profile)
+  assert.equal(typeof handler, 'function')
+  assert.equal(await handler({ toolName: 'agent.edit', reason: 'r' }), 'allowed-once')
+  assert.deepEqual(seen, [{ sessionId: 'session-9', toolName: 'agent.edit', reason: 'r' }],
+    'the handler binds the turn identity the approval audit needs')
+
+  const allowing = makeAdapter({ permission: 'allow' }, { askApproval: ask })
+  assert.equal(allowing.adapter.approvalFor({ sessionId: 'session-9' }, allowing.profile), undefined,
+    'allow/reject routes answer their own questions')
+
+  const noChannel = makeAdapter({ permission: 'ask' })
+  assert.equal(noChannel.adapter.approvalFor({ sessionId: 'session-9' }, noChannel.profile), undefined,
+    'a composition without an approval service has no handler, so the transport fails closed')
+})
+
+test('ask routes the agent permission question through the host approval channel', async () => {
+  process.env.FAKE_ACP_PERMISSION = 'full'
+  try {
+    const seen = []
+    const { adapter, sid } = makeAdapter(
+      { models: [{ id: 'fake/opus', name: 'Fake Opus' }], permission: 'ask' },
+      {
+        askApproval: async (request) => {
+          seen.push(request)
+          return 'allowed-once'
+        },
+      },
+    )
+    const chunks = await turn(adapter, sid, [user('edit the file')])
+    assert.match(texts(chunks), /Echo:/, 'the turn continues after the grant')
+    assert.deepEqual(chunks.at(-1).reason, { kind: 'stop' })
+    assert.equal(seen.length, 1, 'the question reached the host approval channel')
+    assert.equal(seen[0].sessionId, sid, 'the question carries the turn identity for the audit trail')
+    assert.equal(seen[0].toolName, 'agent.edit')
+    assert.match(seen[0].reason, /src\/app\.ts/)
+    assert.equal(seen[0].displayReason.en, 'Fake Agent wants to edit files: Write the generated patch to src/app.ts')
+  } finally {
+    delete process.env.FAKE_ACP_PERMISSION
+  }
+})
+
+test('an allow route answers its own permission question', async () => {
+  process.env.FAKE_ACP_PERMISSION = 'full'
+  try {
+    const seen = []
+    const { adapter, sid } = makeAdapter(
+      { models: [{ id: 'fake/opus', name: 'Fake Opus' }] },
+      {
+        askApproval: async (request) => {
+          seen.push(request)
+          return 'rejected'
+        },
+      },
+    )
+    const chunks = await turn(adapter, sid, [user('edit the file')])
+    assert.deepEqual(chunks.at(-1).reason, { kind: 'stop' })
+    assert.equal(seen.length, 0, 'the host is not involved when the route resolves permission itself')
+  } finally {
+    delete process.env.FAKE_ACP_PERMISSION
+  }
+})
+
+test('ask without a host approval channel fails closed instead of granting', async () => {
+  process.env.FAKE_ACP_PERMISSION = 'full'
+  try {
+    const { adapter, sid } = makeAdapter({
+      models: [{ id: 'fake/opus', name: 'Fake Opus' }],
+      permission: 'ask',
+    })
+    const chunks = await turn(adapter, sid, [user('edit the file')])
+    assert.equal(chunks.at(-1).reason.kind, 'aborted', 'a denied permission withdraws the turn')
+    assert.deepEqual(chunks.at(-1).reason.failure, {
+      message: 'no approval channel answered for agent.edit, so the agent stopped this turn',
+      code: 'APPROVAL_UNAVAILABLE',
+    }, 'the harness says why, instead of blaming the agent for cancelling')
+    assert.doesNotMatch(texts(chunks), /Echo:/, 'the agent did not proceed')
+  } finally {
+    delete process.env.FAKE_ACP_PERMISSION
+  }
+})
+
+test('a rejected approval is reported as the user stopping the turn', async () => {
+  process.env.FAKE_ACP_PERMISSION = 'full'
+  try {
+    const { adapter, sid } = makeAdapter(
+      { models: [{ id: 'fake/opus', name: 'Fake Opus' }], permission: 'ask' },
+      { askApproval: async () => 'rejected' },
+    )
+    const chunks = await turn(adapter, sid, [user('edit the file')])
+    assert.equal(chunks.at(-1).reason.kind, 'aborted')
+    assert.deepEqual(chunks.at(-1).reason.failure, {
+      message: 'you rejected the approval request for agent.edit, so the agent stopped this turn',
+      code: 'APPROVAL_REJECTED',
+    })
+    assert.doesNotMatch(texts(chunks), /Echo:/, 'a rejection is never a grant')
+  } finally {
+    delete process.env.FAKE_ACP_PERMISSION
+  }
+})
+
+test('a dismissed approval is reported as such, not as an agent cancellation', async () => {
+  process.env.FAKE_ACP_PERMISSION = 'full'
+  try {
+    const { adapter, sid } = makeAdapter(
+      { models: [{ id: 'fake/opus', name: 'Fake Opus' }], permission: 'ask' },
+      { askApproval: async () => 'cancelled' },
+    )
+    const chunks = await turn(adapter, sid, [user('edit the file')])
+    assert.equal(chunks.at(-1).reason.kind, 'aborted')
+    assert.deepEqual(chunks.at(-1).reason.failure, {
+      message: 'you dismissed the approval request for agent.edit, so the agent stopped this turn',
+      code: 'APPROVAL_DISMISSED',
+    })
+  } finally {
+    delete process.env.FAKE_ACP_PERMISSION
+  }
+})
+
+test('a reject policy reports that the route denies the agent its tools', async () => {
+  process.env.FAKE_ACP_PERMISSION = 'full'
+  try {
+    const { adapter, sid } = makeAdapter(
+      { models: [{ id: 'fake/opus', name: 'Fake Opus' }], permission: 'reject' },
+      { askApproval: async () => 'allowed-once' },
+    )
+    const chunks = await turn(adapter, sid, [user('edit the file')])
+    assert.equal(chunks.at(-1).reason.kind, 'aborted')
+    assert.deepEqual(chunks.at(-1).reason.failure, {
+      message: 'this route denies the agent its tools (permission: reject) for agent.edit, so the agent stopped this turn',
+      code: 'APPROVAL_DENIED',
+    }, 'a policy denial is not confused with a user decision')
+    assert.doesNotMatch(texts(chunks), /Echo:/, 'the host approval channel was never consulted')
+  } finally {
+    delete process.env.FAKE_ACP_PERMISSION
+  }
 })

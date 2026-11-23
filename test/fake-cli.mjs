@@ -5,11 +5,17 @@
  * a future trae command). Its only job is to prove the `cli` transport and the
  * recipe language work end to end.
  *
- * Flags: `--resume <id>`, `--model <id>`.
+ * Flags: `--resume <id>`, `--model <id>`, `--catalog-models`.
  * `FAKE_CLI_MODE=refusal` reports a refusal; `FAKE_CLI_MODE=crash` exits 3.
  * `FAKE_CLI_PROMPTS=<path>` appends one JSON line per invocation.
+ *
+ * `--catalog-models` prints a catalogue document instead of running a turn, the
+ * way a launcher enumerates its gateway models: `FAKE_CLI_CATALOG_MODE=error`
+ * exits 2 with stderr, `=sleep` stalls past a catalogue timeout, `=stubborn`
+ * ignores SIGTERM to prove the timeout escalates, and
+ * `FAKE_CLI_CATALOG_PAYLOAD` replaces the document.
  */
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, writeSync } from 'node:fs'
 
 const argv = process.argv.slice(2)
 const flagValue = (name) => {
@@ -19,6 +25,34 @@ const flagValue = (name) => {
 
 const resumed = flagValue('--resume')
 const model = flagValue('--model') ?? 'default'
+
+// Catalogue mode stands in for `aiden x models --json`: a launcher that prints
+// its model list and exits instead of running a turn. It is handled before
+// stdin, because such an enumerator never reads a prompt.
+if (argv.includes('--catalog-models')) {
+  const mode = process.env.FAKE_CLI_CATALOG_MODE ?? 'ok'
+  if (mode === 'error') {
+    writeSync(2, 'fake-cli: catalogue fetch exploded\n')
+    process.exit(2)
+  }
+  if (mode === 'sleep') {
+    await new Promise((resolve) => setTimeout(resolve, 5_000))
+    process.exit(0)
+  }
+  if (mode === 'stubborn') {
+    // A launcher that traps the timeout's SIGTERM, so only an escalation to
+    // SIGKILL can end it; without one this exits by itself after five seconds.
+    process.on('SIGTERM', () => {})
+    await new Promise((resolve) => setTimeout(resolve, 5_000))
+    process.exit(0)
+  }
+  // The payload override exists so a test can prove the *transport* decides
+  // what counts as a usable entry (duplicates, non-string ids, banner noise).
+  const payload = process.env.FAKE_CLI_CATALOG_PAYLOAD
+    ?? '{"models":[{"id":"fast","context_length":64000},{"id":"deep","context_length":200000}]}'
+  writeSync(1, `${payload}\n`)
+  process.exit(0)
+}
 
 let prompt = ''
 if (process.stdin.isTTY !== true) {
@@ -61,4 +95,4 @@ if (process.env.FAKE_CLI_DUMP_ENV === '1') {
 emit({ message: { reasoning: 'pondering the request' } })
 emit({ message: { tool: 'Read src/a.ts' } })
 emit({ message: { content: `done(${model}): ${prompt.trim().slice(0, 40)}` } })
-emit({ usage: { input_tokens: 11, output_tokens: 4 } })
+emit({ usage: { input_tokens: 11, output_tokens: 4, cache_read_input_tokens: 300, cache_creation_input_tokens: 20 } })

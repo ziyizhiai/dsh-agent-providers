@@ -687,6 +687,25 @@ stderr 尾部，因为这类失败在浏览器里只剩一句错误。
 | **schema 会把 `auth` 物化成 `{}`、把 `command` 物化成 `''`** | `mergePreset` 把空字符串也算"未设置"；只有 `methodId` 是字符串时才当作配置了登录。这就是当初 `args: []` 那个坑的同类 |
 | Claude 走这台机器的网络被 Anthropic 挡（HTTP 403 区域限制） | 不是插件问题；错误原样透出。结构上已验证到"选模型 → 推理 → agent 报错" |
 
+### 首次 CI：Node 22 上 23 个测试被 cancelled
+
+第一次推上去 CI 就红了：`test (22)` 失败、`test (24)` 被 fail-fast 取消。
+本地只有 Node 24，所以下载 Node 22 复现——结果是 **23 个测试 `cancelled`，0 failed**，
+报错 `Promise resolution is still pending but the event loop has already resolved`。
+
+两个原因叠在一起：
+
+1. `withTimeout` 把定时器 `unref()` 了。被守卫的调用如果永远不 settle，事件循环
+   先排空，这个"超时"就永远不会触发——等于静默丢弃，而不是报超时。
+2. 子进程**根本启动不了**时（命令不存在），`initialize` 请求永远没有应答，
+   而 `guard` 的 spawn-error 分支写在 `catch` 里——只有 promise settle 之后才执行，
+   所以那段是死代码。坏命令会一直等到 `connectTimeoutMs`（默认 120s）。
+
+修法：`withTimeout` 的定时器不再 `unref`；`start()` 把 `initialize` 和
+"启动失败" 的 promise 一起 race，子进程 `error` 事件一到就立刻结算。
+另外把占位目录的测试从"不存在的命令"改成"启动后立刻退出"的进程——
+依赖 spawn 错误调度时机本身就是不可移植的测试写法。
+
 ### 一次被纠正的错误结论
 
 M2 第一次收尾时我判断"opencode 自己的网关连不上，与插件无关"——**这个结论是错的**。

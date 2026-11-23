@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Agent 供应商",
-    "description": "把编程 agent（OpenCode、Claude Code、Codex，或任意 ACP agent）当作模型供应商使用：它的模型以自己的分组出现在模型选择器里，实际干活的是 agent 自己的工具循环，会话、会话列表和凭据仍由 harness 管理。复用 harness 里已存的凭据，不需要二次填写。",
+    "description": "把编程 agent（OpenCode、Claude Code、Codex、TRAE CLI，或任意 ACP agent）当作模型供应商使用：它的模型以自己的分组出现在模型选择器里，实际干活的是 agent 自己的工具循环，会话、会话列表和凭据仍由 harness 管理。复用 harness 里已存的凭据，不需要二次填写。",
     "detail": "docs/DETAIL.zh.md"
   }
 }

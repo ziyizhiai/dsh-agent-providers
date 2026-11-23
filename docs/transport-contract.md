@@ -1,6 +1,6 @@
 # 如何接入一个新的 agent（transport 契约）
 
-这份文档只讲一件事：**当你想再接一个 agent（比如 trae 命令行模式），要写多少代码。**
+这份文档只讲一件事：**当你想再接一个 agent（比如 traex 的命令行模式），要写多少代码。**
 
 答案分三档，从「只改配置」到「写一个 transport」。
 
@@ -63,46 +63,94 @@ lib/transport/index.js      工厂：profile.transport → 实现
 ```yaml
 agents:
   trae:
-    transport: acp
-    command: trae
-    args: ['acp']
+    preset: traex        # 展开为 transport: acp、command: traex、args: ['acp', 'serve']
 ```
 
-如果它还需要一个密钥，而 DSH 里已经存过（比如 `TRAE_API_KEY`）：
+如果它还需要一个密钥，而 DSH 里已经存过（比如企业版 PAT 的
+`TRAECLI_PERSONAL_ACCESS_TOKEN`），映射一个凭据引用即可：
 
 ```yaml
-    credentials: { TRAE_API_KEY: TRAE_API_KEY }   # 子进程变量名: DSH 凭据引用名
+    credentials: { TRAECLI_PERSONAL_ACCESS_TOKEN: TRAECLI_PERSONAL_ACCESS_TOKEN }   # 子进程变量名: DSH 凭据引用名
 ```
 
-**改动量：0 行代码。** 前提是它有 ACP 模式——目前 opencode / Claude Code / Codex / Gemini CLI / Goose / Cursor 都有。
+**改动量：0 行代码。** 前提是它有 ACP 模式——目前 opencode / Claude Code / Codex /
+TRAE CLI（`traex acp serve`）/ Gemini CLI / Goose / Cursor 都有。注意 `traex acp` 只是子命令组，
+写成 `args: ['acp']` 只会拿到帮助输出。
 
 ### 第 1 档：一次性 CLI + JSON 行输出 → 写一个 recipe
 
 ```yaml
 agents:
-  trae:
+  my-agent:                                # 举例：一个没有 ACP、只会吐 JSON 行的 CLI
     transport: cli
     format: jsonl
-    command: trae
+    command: my-agent
     args: ['run']
     models:
-      - { id: trae-fast, name: Trae Fast, contextWindow: 128000 }
+      - { id: my-agent-fast, name: My Agent Fast, contextWindow: 128000 }
     cli:
       promptVia: stdin                       # stdin | arg
       resumeArgs: ['--continue', '{session}'] # 有这两项才点亮 RESUME
       sessionIdPath: session_id               # 第一行 JSON 里会话 id 的路径
       modelArgs: ['--model', '{model}']
+      catalogCommand: ['my-agent', 'models', '--json']  # 目录命令：模型表让 agent 自己报
+      catalogJson: { entries: models, id: id, name: name, contextWindow: context_length }
+      catalogTimeoutMs: 20000                # 目录命令的超时，默认 20000
       jsonl:
         text: message.content                 # 点号路径
         reasoning: message.reasoning
         tool: message.tool
         error: { path: is_error, equals: 'true' }
-        usage: { input: usage.input_tokens, output: usage.output_tokens }
+        usage:                                # cacheRead / cacheWrite 可选
+          input: usage.input_tokens
+          output: usage.output_tokens
+          cacheRead: usage.cache_read_input_tokens
+          cacheWrite: usage.cache_creation_input_tokens
 ```
 
 **改动量：0 行代码**，只要它的输出长得像「每行一个 JSON」。能力位会诚实地降级：
 没有 `resumeArgs` 就不点亮 `RESUME`，于是每轮都全量重放；没有 `list`，DSH 里就
 只能靠 DSH 自己的会话列表管。
+
+#### 目录命令：让 CLI 自己报模型表
+
+`models:` 是静态表；如果 agent 自己知道账号相关（或网关下发）的模型表，用 `catalogCommand`
+让 `catalog()` 去问它：
+
+- `catalogCommand`：非空 argv 数组。transport 用 `spawn(argv[0], argv.slice(1))` 跑它，抓
+  stdout（上限约 1 MiB）和 stderr 尾部；`options.signal` 中断时会杀掉子进程。
+- `catalogTimeoutMs`：超时上限，默认 `DEFAULT_CATALOG_TIMEOUT_MS = 20000`；超时拒绝并点名命令。
+- 退出码非 0：拒绝，带上命令名和 stderr 尾部。
+- stdout 先严格按 JSON 解析；失败时再从第一个 `{` 到最后一个 `}` 切一段重试；仍失败就点名命令
+  拒绝。这样命令在 JSON 前后混了少量输出也还能读。
+- `catalogJson` 指定取值路径：`entries` 必须是数组，否则拒绝；每个条目的 `id` 必须是非空字符串
+  （否则跳过该条）；`name` 在配了 `catalogJson.name` 且取到非空字符串时用它的值，否则用 id；
+  `contextWindow` 在 `catalogJson.contextWindow` 给出有限且 > 0 的数时采用。
+- 按 id 去重（先出现者胜），保留源顺序。
+- 没有 `catalogCommand`：维持原行为——声明的 `models:` 就是目录。
+- 加载期校验（`assertCliRecipe`）：有 `catalogCommand` 却没有 `catalogJson.entries` / `.id`、
+  有 `catalogJson` 却没有 `catalogCommand`、有 `catalogTimeoutMs` 却没有 `catalogCommand`，都在
+  加载时报 `dsh-agent-providers: agent "<route>" …`。
+
+实测例子（`aiden-claude` 预设）：`aiden x models --claude --json` 在 stdout 上只吐纯 JSON，
+形状是 `{ schema_version, source, fetched_at, models: [ { cli_type, id, series, alias,
+context_length, quota, ptu, capacity, status } ] }`（实测 7 个），它自己的
+`- Check user login status...` 转圈提示在 stderr。每个 `id` 正是 `--model` 接受的值，
+`context_length` 是网关的权威窗口（`ark-deepseek-v4.1-flash-1017` → 936000），所以那一项就是
+`catalogJson: { entries: 'models', id: 'id', contextWindow: 'context_length' }`。有了这条缝，
+`cli` 路由的上下文窗口不用靠 `defaultContextWindow` 猜。
+
+#### 缓存 token 的用量字段
+
+`jsonl.usage` 除 `input` / `output` 外还有两个可选路径 `cacheRead` / `cacheWrite`，映射成
+`{ inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens? }`；缓存字段只在计数 > 0 时
+带出。harness 要求计数互斥，所以：
+
+- 报**未缓存**输入的 agent 直接映射即可——Claude Code 就是这样：`usage.input_tokens` 与
+  `usage.cache_read_input_tokens` / `usage.cache_creation_input_tokens` 并列，所以
+  `aiden-claude` 不需要 `inputTokensIncludeCache`；
+- 把缓存折进 `inputTokens` 的 agent 走 ACP 的 `inputTokensIncludeCache`（不是 CLI recipe 的字段）；
+- `jsonl.usage` 配了 `cacheRead` / `cacheWrite` 却缺 `input` / `output`，在加载期报错。
 
 ### 第 2 档：输出结构 recipe 表达不了 → 写一个 transport
 
@@ -148,4 +196,8 @@ test('satisfies the transport contract', async (t) => {
 | `session/load` 会把整个历史推回来 | 主动丢弃，否则 DSH 会话里每条消息都重复 |
 | `PlanEntry` 缺 `priority`/`status` 会被 SDK 静默丢掉 | 发 plan 时三个字段都要给 |
 | 失败的 CLI 常常 exit 0 | 必须提供 `jsonl.error` 路径，否则会当成功 |
+| 目录命令的输出混进日志行 | 约定 stdout 只放 JSON；解析失败会从第一个 `{` 到最后一个 `}` 再试一次，仍失败就点名命令报错 |
+| CLI 自己报的 `modelUsage.contextWindow` 是通用值 | 实测 Aiden 一律 `1e6`；用它计量会错，让目录命令在 `catalogJson.contextWindow` 里给权威窗口 |
+| 完整消息事件又把正文吐一遍 | 只映射增量（如 Aiden 的 `stream_event`）；映射 `assistant` 这类完整消息会让答案重复两遍 |
+| CLI 的会话能力常常只有 resume | 没有 list / fork / delete；不广告 `SWITCH_MODEL` 时换模型等于新会话 + 重放 |
 | 子进程退出码非 0 但 stdio 已关 | 先读完流再等 `exit`，两件事都要做 |

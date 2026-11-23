@@ -1,6 +1,7 @@
 # 把 Claude Code / Codex 这类 Agent 接进 DSH —— 现状盘点与架构方案
 
-> 调研基线：本机 DSH `0.2.2-rc.3`（profile `web`），事实来源为**已安装包源码** + **npm registry 实拉包** + 联网检索。
+> 调研基线：本机 DSH `0.2.2-rc.3`（profile `web`）——成文时的基线；最终真机验证跑在
+> `0.2.2-rc.1` 上，见第十一轮。事实来源为**已安装包源码** + **npm registry 实拉包** + 联网检索。
 > 凡是没能实测的地方都标了「未验证」。
 
 ---
@@ -103,7 +104,7 @@
 | ① 切换 agent 就像选模型组 | 社区 A/B 路线（`dsh-claude-code-local`、`dsh-subscription-agents`）已实现；官方无 |
 | ② provider 组下面挂它支持的模型 | `dsh-subscription-agents`（CLI 自报）；其余多为静态写死 |
 | ③ 实际干活是这些 agent，不是 DSH 自己 | A/B/C 都满足（DSH 的 tool 循环被短路） |
-| ④ **在 DSH 里管理它们的会话** | ⚠️ **没人做全**。`dsh-acp-resume` 有会话池+面板但走工具；ACP 自带 `session/list|load|fork|delete`，没人接到 DSH 侧边栏当"会话列表"用 |
+| ④ **在 DSH 里管理它们的会话** | ⚠️ **没人做全**。`dsh-acp-resume` 有会话池+面板但走工具；ACP 自带 `session/list\|load\|fork\|delete`，没人接到 DSH 侧边栏当"会话列表"用 |
 
 ④ 就是你这个插件真正的差异点。
 
@@ -409,7 +410,7 @@ MVP（opencode，复用已有 Go 凭据）：
 
 | # | 问题 | 影响 | 对策 |
 |---|---|---|---|
-| 1 | **DSH 的工具 / 审批 / 沙箱全部失效** | 外部 agent 用自己的权限模型干活，DSH 的 `approval`、`sandbox-policy`、`fs-observation-policy` 都管不着它 | 明确接受；用 `permission: reject` + agent 侧 `--sandbox read-only` / `--permission-mode plan` 收口。`dsh-subscription-agents` 的做法是**直接只允许 Full access，受限会话一律拒绝**（fails closed） |
+| 1 | **DSH 的沙箱 / fs-observation 管不着外部 agent** | 外部 agent 用自己的权限模型和沙箱干活，`sandbox-policy`、`fs-observation-policy` 仍然管不到它。**审批不同**：`permission: ask` 已经把 agent 自己的权限请求接到 DSH 的 approval 服务，用户可以在同一个弹窗里拒绝 | 接受沙箱边界；要人工把关用 `permission: ask`，全自动用 `allow`，一律拒绝用 `reject`；agent 侧再用 `--sandbox read-only` / `--permission-mode plan` 收口。`dsh-subscription-agents` 的做法是**直接只允许 Full access，受限会话一律拒绝**（fails closed） |
 | 2 | **上下文双份** | DSH 日志一份、agent 侧一份，token 花两遍 | resume 模式只发增量；replay 模式对老会话截断 |
 | 3 | **首 token 延迟** | 冷启动 spawn + initialize + new session，5–15s 都可能 | 进程池 + 空闲保活（`dsh-acp-resume` 的 10 分钟空闲策略） |
 | 4 | **辅助调用会误触** | `purpose: 'session-title'` / compaction 也会调 `stream()`，等于为了起标题去开一个 Claude Code | 在 `stream()` 里按 `purpose` 短路：非普通对话直接返回错误或纯启发式标题 |
@@ -706,6 +707,103 @@ stderr 尾部，因为这类失败在浏览器里只剩一句错误。
 另外把占位目录的测试从"不存在的命令"改成"启动后立刻退出"的进程——
 依赖 spawn 错误调度时机本身就是不可移植的测试写法。
 
+### 第十轮：TRAE CLI（`traex`，traecli 0.216.0）
+
+公司内部的 TRAE CLI 自带 ACP server，所以接进来只是一个预设，没有写新 transport：
+
+```yaml
+traex:
+  displayName: TRAE CLI
+  transport: acp
+  command: traex
+  args: ['acp', 'serve']
+  inputTokensIncludeCache: true
+  contextWindowMetaPath: 'trae.contextWindow'
+  permission: ask
+```
+
+**第一条坑：`acp` 是子命令组，不是 server。** `traex acp` 只打印帮助，必须
+`traex acp serve`；写成 `args: ['acp']` 只会拿到帮助输出。
+
+实测（内部账号）：
+
+| 项 | 结果 |
+|---|---|
+| `initialize` | `loadSession: true`；`promptCapabilities` image / embeddedContext true、audio false；`sessionCapabilities` list / additionalDirectories / systemPrompt / fork / resume / close——**没有 delete** |
+| 握手 / 冷启动 | 0.5–1.4s / 冷启动首答 4–5s（含 agent 自己 22–24k token 的 system prompt） |
+| 会话配置项 | 四个 `select`：`model`、`mode`（default / plan / auto / bypass_permissions）、`collaboration_mode`（default / plan）、`reasoning_effort`（low / medium / high / max，当前 max） |
+| 模型目录 | 账号相关的 12 个**配置名**，大小写不一致：`Doubao-Seed-Evolving`、`Doubao-Seed-2.1-Pro`、`Doubao-Seed-2.1-Turbo`、`deepseek-v4.1-flash`（默认）、`gpt-6.1-sol`、`gpt-6-astra`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`DeepSeek-V4-Pro`、`Seed-Dogfooding-2.0`、`Doubao-Seed-Code`；每项有更友好的 `name` 和 `_meta.trae.contextWindow` |
+| 窗口分布（目录静态值，可能过时） | 1,000,000（Seed-Evolving）、475,000（GPT-6.1-Sol）、272,000（gpt-6-astra / gpt-5.6-*）、216,000（DeepSeek-V4-Pro）、200,000（Seed-2.1-Pro/Turbo、DeepSeek-V4.1-Flash、Seed-Dogfooding-2.0）、116,000（Seed-Code） |
+| 换模型 | `session/set_config_option`（`configId: 'model'`，值取上面的配置名）：切到 `gpt-6.1-sol` 163 ms、首 token 4108 ms、总 4493 ms；切到 `Doubao-Seed-Evolving` 83 ms、首 token 10.5s |
+| 续聊 / 分叉 | `session/load` 168 ms，同一个 session id、`resumed=true`；第二轮正确回忆存储的 codeword，该轮 `inputTokens` 只有 61（只转发新的 user 轮，之前上下文由 agent store 提供，22912 个 cache-read token）。`session/fork` 返回不同 id、继承历史，答对 codeword，2586 ms |
+| 权限映射（`permission: ask`） | 编辑请求带选项 `approved`（allow_once）+ `abort`（reject_once，显示名 "No, provide feedback"）。harness 结果 `allowed-once` → 选中 `approved`，写入真的发生，`end_turn`；`rejected` → 选中 `abort`，TRAE CLI **结束整轮**（`stopReason: cancelled`），不是只失败一个工具。批准是一次性的（`allowed-once`），问两次就弹两次。没有审批服务 / 问题落在回合外 → transport 拒绝并记日志（fail closed，绝不静默放行）；无头部署要显式设 `permission: allow` 或 `reject`。审批弹窗带 agent 自己的 `reason` + 本地化 `displayReason`（en `TRAE CLI asks to edit: Editing files` / zh `TRAE CLI 请求执行 edit：Editing files`）——编辑请求只有泛化标题，没有文件路径可承诺 |
+| 图片 | 256×256 纯红 PNG 被 `gpt-6.1-sol`（4.4s）和 `deepseek-v4.1-flash`（2.2s）都读成 "Red" |
+| 未登录 | 空 `HOME`（真实登录未动）：`initialize` 仍成功并列出三个 auth method，但 `session/new` / `session/list` 回 `{"code":-32000,"message":"Authentication required"}`；插件 fallback 让分组仍可选，显示 `TRAE CLI (sign-in required)` 和警告标签 |
+| 上下文窗口 | 会发 `usage_update`，四个模型实测运行时 `size` 都是原始窗口的 **95%**：`gpt-6.1-sol` 475,000 → 451,250、`gpt-5.6-sol` 272,000 → 258,400、`DeepSeek-V4-Pro` 216,000 → 205,200、`Doubao-Seed-Evolving` 1,000,000 → 950,000。`_meta` 同时给 `rawContextWindow` 和 `autoCompactBufferTokens`（40,960，再减一次才是它自己的 `autoCompactTokenLimit`，不是 raw 与 `size` 的差）。**目录里也自报窗口**：`contextWindowMetaPath: 'trae.contextWindow'` 让 `resolveModel` 读出每项 `_meta.trae.contextWindow`，而且它在还没有窗口时会自己补一次目录——所以即使 headless、从没列过模型，也一开始就返回实测的 `gpt-6.1-sol` 475000、`Doubao-Seed-Code` 116000（以前一律 200000）。优先级：profile `models[].contextWindow` → 运行时 `usage_update.size` → 目录 `_meta` → route `defaultContextWindow` → 200000。运行时压过目录，因为目录会过时：`deepseek-v4.1-flash` 目录写 `_meta.trae.contextWindow: 200000`，同一模型的运行时 `usage_update` / `_meta["_trae/contextUsage"]` 却报 `rawContextWindow: 1000000`、`effectiveContextWindow: 950000`、`autoCompactTokenLimit: 909040`，harness 采用运行时的 950000 |
+| 斜杠命令 | `available_commands_update`：review / review-branch / review-commit / init / compact / logout |
+| 工具活动 | `tool_call` / `tool_call_update`（`kind: 'execute'`，title 形如 `printf hi > probe.txt`），折进 reasoning 通道 |
+
+**用量口径是这次唯一需要适配的地方。** ACP 没规定 `inputTokens` 与缓存计数的关系：
+OpenCode 报的是不含缓存的输入，TRAE CLI 把 cache read 和 write 都折进 `inputTokens`。实测一轮
+`{ totalTokens: 49481, inputTokens: 49394, outputTokens: 87, cachedReadTokens: 24624, cachedWriteTokens: 24764 }`
+——49394 = 24624 + 24764 + 6。DSH 要求互斥计数，照搬会按约 2 倍计量；预设加
+`inputTokensIncludeCache: true` 后，同类一轮经插件报
+`{ inputTokens: 103, outputTokens: 2, cacheReadTokens: 22656 }`（103 + 22656 = 原始的 22759）。
+插件里没有厂商分支，只有这个开关。
+
+登录不做凭据映射：`traex login` 自己写 `~/.trae/traecli.toml`，`traex login status` 回
+"Logged in using Trae"；插件复用（子进程保留 `HOME`，但洗掉了 `KEY/PASSWORD/SECRET/TOKEN`
+形状的变量和 `DSH_*`）。`initialize.authMethods` 有 `trae-sso` / `trae-tob-browser` /
+`trae-tob-pat`；最后一种要求启动前设好 `TRAECLI_PERSONAL_ACCESS_TOKEN`，非交互场景由 profile
+从已存凭据映射。权限请求本身由 agent 发出；`permission: ask`（预设自带）把它转到 DSH 的
+approval 服务，所以用户在 harness 的审批弹窗里回答，而不是被插件自动放行。agent 自己的
+sandbox 仍然不是 harness 的 sandbox：审批通过只代表「这次工具调用可以执行」，不代表 harness
+在做沙箱隔离。
+
+**窗口优先级**（高到低）：profile 声明的 `models[].contextWindow` → 运行时 `usage_update.size` →
+目录 `_meta`（`contextWindowMetaPath`）→ route `defaultContextWindow` → 200 000 兜底。运行时压过
+目录，因为目录会过时（上面的 `deepseek-v4.1-flash` 就是例子）。`resume()` 现在也会重新应用 profile
+的 `configOptions`，所以改过的 `mode` / `reasoning_effort` 对恢复出来的会话同样生效。
+
+验证脚本：`probe/probe-traex.mjs [model] [prompt] [cwd]`，走预设跑一轮，打印能力、带窗口的
+目录、四个配置项和互斥用量。
+
+### 第十一轮：真机 headless 端到端（把插件挂进真实 DSH profile）
+
+前几轮都是 probe 直接驱动 transport；这一轮把插件挂进一个真实的 DSH profile（headless、临时
+`DSH_HOME`、profile patch 指向 `trae`/`traex`），跑完整一轮：
+
+| 发现 | 处理 |
+|---|---|
+| `engines.dsh: >=0.2.2-rc.3` 让装着的 `0.2.2-rc.1` **静默禁用 provider 行**：`disabling profile plugin row "llm-agent-providers" … incompatible`，结果只有 `NO_ADAPTER` | 放宽到 `>=0.2.2-rc.1 <0.3.0-0`，peers 改 `^0.2.2-rc.1`。rc.1 上 provider 行正常挂载、一轮真实对话有答案，**没有写 version exemption** |
+| 插件只声明 `inject: ['llm']`，却用 `ctx.get('approval' / 'credentials' / 'attachments' / 'subprocess' / 'workingDirectory')` 和 `ctx.agents` 取可选服务——cordis fiber 只看得见自己 inject 过的服务，所以这些**全部读作不存在** | 改成 `ctx.inject` 挂 `agents` / `approval` / `attachments` / `credentials` / `profileContext` / `subprocess` / `workingDirectory`，provider 消失时置空。这才是「预设凭据从没解析、图片从没加载、cwd 总是进程 cwd、审批默认是死的」的根因 |
+| 审批结果现在点名工具：answerer 放行 → `approval/request "agent.edit" -> allowed-once`，文件写出（16 字节），回合完成，exit 0；没有 answerer → `APPROVAL_UNAVAILABLE: no approval channel answered for agent.edit, so the agent stopped this turn`，exit 1，没有文件 | 新增四个失败码 `APPROVAL_REJECTED` / `APPROVAL_DISMISSED` / `APPROVAL_UNAVAILABLE` / `APPROVAL_DENIED`；agent 自己取消仍是 `ABORTED` |
+| 无头运行从不调 `listModels()`，第一轮仍按 200k 计量 | `resolveModel` 在没有窗口时自己补一次目录；实测 `gpt-6.1-sol` → 475000、`Doubao-Seed-Code` → 116000，不需要先打开模型选择器 |
+| headless 多轮：第二轮只转发 **330** 个新 input token 并正确回忆 codeword；第三轮切到 `gpt-6.1-sol`，**120** 个 input token | `resume()` 也会重新应用 `configOptions`，改过的 `mode` / `reasoning_effort` 对恢复会话生效 |
+| reasoning 通道里的 tool 标题是裸 `call_00_…` | 标题形如 call id 时回退成 ACP kind（`→ Editing files` 而不是 `→ call_00_…`）；冷启动提示和第一条 reasoning 用换行分开 |
+
+验证脚本：`probe/probe-dsh-headless.mjs`——临时 `DSH_HOME` + 软链 + patch，从不碰 `~/.dsh` /
+`~/.trae`；打印带时间戳的 `--json` 事件并断言写出的文件；`--no-approver` 复现 fail-closed，
+`--model` 换模型。
+
+### 第十二轮：OpenCode v2（`opencode2`，2.3.2）——和 v1 是两个程序
+
+上一轮差点把 v2 当成 v1 来测：PATH 上的 `opencode` 是 1.17.18（npm 版），而用户实际在跑的是
+`opencode2` = `~/.opencode2/bin/opencode2`（2.3.2，指向 `@opencode/cli`），两者是不同二进制、不同登录库。
+
+| 项 | 实测 |
+|---|---|
+| ACP | `opencode2 acp`（同 v1 的命令形状） |
+| 登录 | 自己读 `~/.local/share/opencode/auth.json`（provider: `deepseek` / `gateway` / `opencode-go`），**无需** `OPENCODE_AUTH_CONTENT` 文档；因此也不需要 `CUSTOM_OPENCODE_API_KEY`（本机确实没存，`preset: opencode` 会报 needs credential） |
+| 模型 | 49 个 provider 限定名：`deepseek/deepseek-v4-pro`、`deepseek/deepseek-flash`、`gateway/gpt-5.5`、`opencode-go/claude-haiku-5-5`… |
+| 用量 | 已是互斥口径：一轮 `{inputTokens: 69, outputTokens: 23, cacheReadTokens: 59344, reasoningTokens: 223}`，`totalTokens` = 四项之和 → 不需要 `inputTokensIncludeCache` |
+| 上下文 | 发 `usage_update`：默认模型 `size: 1048576` |
+| 权限 | **会发** `session/request_permission`，但默认自动放行；把项目/全局配置写成 `{"permission":{"edit":"ask","bash":"ask"}}` 后才问。选项 `once`(allow_once) / `always`(allow_always) / `reject`(reject_once)；`toolCall.title` 是**目标路径**，`content` 里带 `{type:'diff', oldText, newText}` |
+| 经插件 | 批准 → `OpenCode v2 请求修改文件：through-plugin.txt`，文件写出、`end_turn`；拒绝 → `cancelled` 且 `APPROVAL_REJECTED`；目录 49 个模型 |
+
+结论：新增 `preset: opencode2`（`command: opencode2`、`args: ['acp']`、`permission: 'ask'`、无凭据映射、
+不开 cache 折算）。v1 的 `opencode` 预设保持不变——它的凭据文档坑仍然存在，只是不适用于 v2。
+
 ### 一次被纠正的错误结论
 
 M2 第一次收尾时我判断"opencode 自己的网关连不上，与插件无关"——**这个结论是错的**。
@@ -716,3 +814,92 @@ M2 第一次收尾时我判断"opencode 自己的网关连不上，与插件无�
 
 **下一刀（M3）**：usage 差分、侧栏 fork 按钮；以及等 opencode 的网关鉴权可用（或换
 Claude Code / Codex 的 ACP）之后再验证一整轮真实对话。
+
+---
+
+### 第十三轮：Aiden Claude（`aiden x claude`，Aiden 2.0.6 / Claude Code 2.1.328，实测 2026-11-23）
+
+公司内部的 **Aiden** 启动器包着 Claude Code 跑，网关是 `aiden-aiproxy.bytedance.net`，启动时让
+用户挑一个网关模型。这一轮把它接成模型供应商组，所有结论来自 2026-11-23 的实跑。
+
+实测环境：`aiden` 2.0.6（`@aiden-cli/core`）、`claude` 2.1.328、模型
+`ark-deepseek-v4.1-flash-1017`、网关 `https://aiden-aiproxy.bytedance.net/v2`。
+
+**路线：走已有的 `cli` transport（一轮一进程），不新增 transport、不上 ACP。** `aiden x claude`
+不会讲 ACP，而且 aiden 的网关环境（动态 JWT / apiKeyHelper）是私有的——让 Aiden 自己负责认证
+才是这条路由的意义。
+
+#### 目录命令：`aiden x models --claude --json`
+
+| 项 | 实测结果 |
+|---|---|
+| stdout | **纯 JSON**；`- Check user login status...` 的转圈提示走 **stderr**，所以 `cli` 解析前不用过滤日志行 |
+| 形状 | `{ schema_version, source, fetched_at, models: [ { cli_type, id, series, alias, context_length, quota, ptu, capacity, status } ] }`，实测 **7 个**模型 |
+| `id` | 正是 `aiden x claude --model` 接受的值（不是 `claude` 自己的别名） |
+| `context_length` | 网关的权威上下文窗口，例如 `ark-deepseek-v4.1-flash-1017` → **936000** |
+| 认证 | 需要 ByteCloud 登录；`HOME` 完整时 Aiden 复用自己的登录/token 库，**不需要**环境变量 token。只有在既没有缓存会话、又无 TTY 时非交互运行才会失败 |
+
+#### 一轮的命令与事件形状
+
+```
+aiden x claude --model <gateway-id> -p --output-format stream-json --verbose \
+  --include-partial-messages '<prompt>'
+```
+
+| 项 | 实测结果 |
+|---|---|
+| 无 TTY | 给了 `--model` 就能跑，exit code 0；Aiden 的进度/警告走 stderr，stdout 只有 JSONL |
+| 一次用工具的轮次的事件组成 | `system:hook_started` ×8、`system:hook_response` ×8、`system:init` ×1、`system:status` ×2、`stream_event` ×39、`assistant` ×3、`user` ×1、`system:thinking_tokens` ×24、`result:success` |
+| 文本增量 | `event.delta.text`，且 `event.delta.type === "text_delta"` |
+| 思考增量 | `event.delta.thinking`（`thinking_delta`） |
+| 工具名 | `event.content_block.name`（`content_block_start` 且块是 `tool_use`） |
+| 重复风险 | `assistant` 事件把**完整消息**又带一遍——只映射流式增量，映射 `assistant` 会让答案出现两遍 |
+| session id | `session_id` 出现在事件上（首次在 `system:init`，`result` 里也有） |
+| result / usage | `result`（最终文本）、`is_error`、`usage.input_tokens`（**不含缓存**）、`usage.cache_read_input_tokens`、`usage.cache_creation_input_tokens`、`usage.output_tokens` |
+| 窗口陷阱 | `modelUsage.<id>.contextWindow` 实测一律 `1e6`，是通用值，**不能**用来计量；以目录的 `context_length` 为准 |
+
+#### resume
+
+`--resume <session_id>` 续上了同一段对话（回忆验证过）。会话 id 就是 Claude Code 自己的
+session id，来自上面的事件流，不需要额外探测。
+
+#### 权限矩阵（print 模式）
+
+| 场景 | 实测结果 |
+|---|---|
+| 默认（print 模式，无权限 flag） | 受控工具被拒：`Claude requested permissions to write to <path>, but you haven't granted it yet.` |
+| 加 `--permission-mode acceptEdits` | 同一写入成功 |
+| 审批通道 | `cli` transport **没有**审批通道，所以 flag 是唯一的权限控制；这条路由不会弹 DSH 的审批窗（与 ACP 预设的 `permission: ask` 不同） |
+
+#### 透传约束
+
+| 参数 | 结果 |
+|---|---|
+| `--model` / `--settings` / `--setting-sources` / `--fallback-model` | Aiden **拒绝**透传（它自己的 `--model` 优先） |
+| `--resume` / `--print` / `--output-format` / `--verbose` / `--include-partial-messages` / `--permission-mode` / `--allowedTools` / `--dangerously-skip-permissions` | 透传给 Claude Code |
+
+#### 落进代码的形态
+
+新增 `preset: 'aiden-claude'`（`transport: cli`、`command: aiden`、`args: ['x', 'claude',
+'--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+'--permission-mode', 'acceptEdits']`），并把目录与用量做成通用于所有 `cli` recipe 的两个缝：
+
+- `cli.catalogCommand` + `catalogJson`（`entries` / `id` / `name` / `contextWindow`）+
+  `catalogTimeoutMs`：`catalog()` 跑一条命令、按点号路径读实时目录，没有它时仍是声明的 `models:`；
+- `jsonl.usage` 的 `cacheRead` / `cacheWrite`：映射成互斥的 `cacheReadTokens` /
+  `cacheWriteTokens`。Claude Code 本来就把未缓存输入单独给，所以 `aiden-claude` **不需要**
+  `inputTokensIncludeCache`。
+
+没有新 transport，也没有 ACP。
+
+#### 诚实的限制
+
+- 会话只有 resume：没有 `list` / `fork` / `delete`（CLI 进程一轮就结束，会话文件归 Claude Code 自己）；
+- 换模型等于**新开会话 + 重放历史**（`cli` transport 不广告 `SWITCH_MODEL`，无法在活会话里换模型）；
+- 没有图片输入；
+- 权限完全由 flag 决定，`args` / `extraArgs` 是唯一入口（默认 `acceptEdits`：文件编辑放行，其它
+  受控工具仍拒绝；要全放行得显式加 `--dangerously-skip-permissions`）。
+
+验证脚本：`probe/probe-aiden.mjs [model] [prompt] [cwd]`——用 `resolveAgent` + `CliTransport`
+直接解析 `aiden-claude`，打印实时目录，再跑一轮短对话（"Reply with exactly: PONG"），打印
+stopReason 与用量，失败时非零退出。需要已登录的 `aiden`（ByteCloud）并且花一次模型调用。

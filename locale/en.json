@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Agent Providers",
-    "description": "Use a coding agent (OpenCode, Claude Code, Codex, or any ACP agent) as a model provider: its models appear in the model picker under their own group, the agent does the work with its own tools, and the harness keeps the conversation, the session list, and the credential. Reuses credentials the harness already stores, so nothing is typed twice.",
+    "description": "Use a coding agent (OpenCode, Claude Code, Codex, TRAE CLI, or any ACP agent) as a model provider: its models appear in the model picker under their own group, the agent does the work with its own tools, and the harness keeps the conversation, the session list, and the credential. Reuses credentials the harness already stores, so nothing is typed twice.",
     "detail": "docs/DETAIL.md"
   }
 }

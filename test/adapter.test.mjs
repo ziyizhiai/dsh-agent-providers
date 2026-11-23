@@ -34,6 +34,9 @@ after(async () => {
 })
 
 /** Build one adapter over a single route named `fake`. */
+/** An agent that starts and exits at once, so its catalogue can never be read. */
+const DEAD_AGENT = { command: process.execPath, args: ['-e', 'process.exit(1)'] }
+
 function makeAdapter(raw = {}, extra = {}) {
   const profile = resolveAgent('fake', {
     displayName: 'Fake Agent',
@@ -112,7 +115,7 @@ test('an unreadable catalogue still yields a selectable model', async () => {
   // to select a model and therefore no way to reach the sign-in error.
   const { adapter } = makeAdapter({
     catalog: 'probe',
-    command: '/nonexistent/agent',
+    ...DEAD_AGENT,
     displayName: 'Locked Agent',
   })
   const models = await adapter.listModels('fake')
@@ -123,12 +126,12 @@ test('an unreadable catalogue still yields a selectable model', async () => {
 })
 
 test('the fallback model can be turned off or renamed', async () => {
-  const { adapter } = makeAdapter({ catalog: 'probe', command: '/nonexistent/agent', fallbackModel: false })
+  const { adapter } = makeAdapter({ catalog: 'probe', ...DEAD_AGENT, fallbackModel: false })
   assert.deepEqual(await adapter.listModels('fake'), [], 'no placeholder when the profile opts out')
 
   const { adapter: named } = makeAdapter({
     catalog: 'probe',
-    command: '/nonexistent/agent',
+    ...DEAD_AGENT,
     fallbackModel: { id: 'gpt-x', name: 'Pick me' },
   })
   const models = await named.listModels('fake')

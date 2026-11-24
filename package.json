@@ -21,6 +21,7 @@
     "docs/DETAIL.zh.md",
     "docs/preview.svg",
     "docs/transport-contract.md",
+    "docs/RELIABILITY_UPGRADE.md",
     "docs/INTERACTION_UPGRADE.md",
     "README.md",
     "README.zh.md",
@@ -68,6 +69,8 @@
     }
   },
   "scripts": {
+    "test:package": "node scripts/package-smoke.mjs",
+    "test:reliability": "node --test test/reliability.test.mjs",
     "test": "node --test test/*.test.mjs",
     "test:ui": "node --test test/client.test.mjs",
     "test:improvements": "node --test test/improvements.test.mjs",

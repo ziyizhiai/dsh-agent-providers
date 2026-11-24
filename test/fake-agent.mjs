@@ -55,6 +55,9 @@ function usageReport() {
 
 let currentModel = 'fake/opus'
 let currentMode = 'build'
+let currentEffort = 'default'
+let effortVisible = false
+let currentFast = false
 let sessionCounter = 0
 let permissionCounter = 0
 let authenticated = false
@@ -73,13 +76,15 @@ const notify = (method, params) => write({ method, params })
 function configOptions() {
   const options = [
     { id: 'model', name: 'Model', type: 'select', category: 'model', currentValue: currentModel, options: MODEL_OPTIONS },
-    { id: 'effort', name: 'Effort', type: 'select', category: 'thought_level', currentValue: 'default', options: [{ value: 'default', name: 'default' }, { value: 'high', name: 'high' }] },
+    { id: 'effort', name: 'Effort', type: 'select', category: 'thought_level', currentValue: currentEffort, options: [{ value: 'default', name: 'default' }, { value: 'high', name: 'high' }] },
   ]
   // `FAKE_ACP_LEGACY_MODE=1` publishes modes only in the legacy block, which is
   // what Claude Code does; otherwise they appear as a config option too.
   if (process.env.FAKE_ACP_LEGACY_MODE !== '1') {
     options.push({ id: 'mode', name: 'Session Mode', type: 'select', category: 'mode', currentValue: currentMode, options: MODE_OPTIONS })
   }
+  if (process.env.FAKE_ACP_BOOLEAN === '1') options.push({ id: 'fast', name: 'Fast mode', type: 'boolean', category: 'other', currentValue: currentFast })
+  if (process.env.FAKE_ACP_LAZY_EFFORT === '1' && !effortVisible) options.splice(1, 1)
   return options
 }
 
@@ -186,6 +191,11 @@ async function runTurn(id, params) {
     }
   }
 
+  if (process.env.FAKE_ACP_LAZY_EFFORT === '1') {
+    effortVisible = true
+    update(sessionId, { sessionUpdate: 'config_option_update', configOptions: configOptions() })
+    await delay(80)
+  }
   if (SILENCE_MS !== undefined) await delay(SILENCE_MS)
 
   if (PACING_MS !== undefined) {
@@ -244,7 +254,7 @@ function handle(request) {
         protocolVersion: PROTOCOL_VERSION,
         agentCapabilities: {
           ...(SUPPORTS_LOAD ? { loadSession: true } : {}),
-          sessionCapabilities: { list: {}, fork: {}, resume: {}, close: {}, delete: {} },
+          sessionCapabilities: { list: {}, fork: {}, ...(SUPPORTS_LOAD ? { resume: {} } : {}), close: {}, delete: {} },
           promptCapabilities: { image: true, embeddedContext: true },
         },
         // A mode where the agent refuses sessions until `authenticate`, which is
@@ -319,6 +329,8 @@ function handle(request) {
 
     case 'session/set_mode': {
       recordConfig({ method: 'session/set_mode', modeId: params?.modeId })
+      currentMode = params.modeId
+      update(params.sessionId, { sessionUpdate: 'current_mode_update', currentModeId: currentMode })
       respond(id, {})
       return
     }
@@ -339,6 +351,11 @@ function handle(request) {
         }
         currentMode = params.value
       }
+      if (params?.configId === 'fast') {
+        if (params.type !== 'boolean' || typeof params.value !== 'boolean') { fail(id, -32602, 'typed boolean required'); return }
+        currentFast = params.value
+      }
+      if (params?.configId === 'effort') currentEffort = params.value
       const state = sessions.get(params?.sessionId)
       if (state !== undefined) state.model = currentModel
       respond(id, { configOptions: configOptions() })

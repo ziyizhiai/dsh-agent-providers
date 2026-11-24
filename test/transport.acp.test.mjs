@@ -58,6 +58,7 @@ test('signs in when the agent demands it, using the profile parameters', async (
   process.env.FAKE_ACP_AUTH = '1'
   try {
     const profile = fakeAgent({
+      env: { FAKE_ACP_AUTH: '1' },
       auth: {
         methodId: 'api-key',
         ref: 'FAKE_KEY',
@@ -82,6 +83,7 @@ test('a required sign-in with no stored credential names the missing ref', async
   process.env.FAKE_ACP_AUTH = '1'
   try {
     const profile = fakeAgent({
+      env: { FAKE_ACP_AUTH: '1' },
       auth: { methodId: 'api-key', ref: 'FAKE_KEY', params: {} },
     })
     await assert.rejects(
@@ -126,7 +128,8 @@ test('profile session configuration is applied by option id', async () => {
       resolveExecutable: async (command) => command,
     })
     await rm(configLog, { force: true })
-    await transport.create()
+    const session = await transport.create()
+    await session.applyConfig()
     const calls = await readConfigLog()
     assert.deepEqual(
       calls.filter((call) => call.method === 'session/set_config_option').map((call) => `${call.configId}=${call.value}`).sort(),
@@ -153,7 +156,8 @@ test('a mode published only as legacy modes goes through session/set_mode', asyn
       resolveExecutable: async (command) => command,
     })
     await rm(configLog, { force: true })
-    await transport.create()
+    const session = await transport.create()
+    await session.applyConfig()
     const calls = await readConfigLog()
     assert.deepEqual(calls.map((call) => call.method), ['session/set_mode'])
     assert.equal(calls[0].modeId, 'plan')
@@ -199,7 +203,7 @@ test('a one-shot agent advertises no RESUME', async () => {
   try {
     const transport = await open()
     assert.equal(transport.capabilities.has(CAPABILITY.RESUME), false)
-    await assert.rejects(transport.resume('whatever'), /load|failed/i)
+    await assert.rejects(transport.resume('whatever'), error => error.code === 'UNSUPPORTED')
   } finally {
     delete process.env.FAKE_ACP_NO_LOAD
   }
@@ -505,8 +509,7 @@ test('a silent turn trips the silence watchdog and is cancelled', async () => {
     // Behaviour, not internals: a silent agent is told to stop.
     await new Promise((resolve) => { setTimeout(resolve, 200) })
     const calls = await readConfigLog()
-    assert.equal(calls.some((call) => call.method === 'session/cancel'), true,
-      'the transport cancels the agent it stopped waiting for')
+    assert.equal(transport.closed, true, 'silent unfinished work invalidates the process instead of reusing it')
   } finally {
     delete process.env.FAKE_ACP_SILENCE_MS
     delete process.env.FAKE_ACP_CONFIG
@@ -528,6 +531,7 @@ test('a resumed session re-applies the profile configuration', async () => {
 
     await rm(configLog, { force: true })
     const resumed = await transport.resume(id, { cwd })
+    await resumed.applyConfig()
     const calls = await readConfigLog()
     assert.deepEqual(
       calls.filter((call) => call.method === 'session/set_config_option').map((call) => `${call.configId}=${call.value}`),

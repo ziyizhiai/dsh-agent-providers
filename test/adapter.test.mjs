@@ -121,7 +121,7 @@ test('an unreadable catalogue still yields a selectable model', async () => {
   })
   const models = await adapter.listModels('fake')
   assert.equal(models.length, 1)
-  assert.equal(models[0].id, 'default')
+    assert.equal(models[0].id, '__dsh_backend_default__')
   assert.match(models[0].name, /sign-in required/)
   assert.deepEqual(models[0].badge, { text: { en: 'sign-in required', zh: '需要登录' }, tone: 'warning' })
 })
@@ -350,7 +350,7 @@ test('images from the current turn reach an agent that accepts them', async () =
       { readImage: async () => ({ data: new Uint8Array([1, 2, 3, 4]) }) },
     )
     const models = await adapter.listModels('fake')
-    assert.deepEqual(models[0].inputModalities, ['text', 'image'], 'a real reader upgrades the advertised modality')
+    assert.deepEqual(models[0].inputModalities, ['text'], 'reader alone cannot prove backend image support')
 
     await rm(prompts, { force: true })
     const messages = [{

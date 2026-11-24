@@ -86,7 +86,7 @@ test('lists what the agent stores, with the owning DSH session attached', async 
   const [route] = inventory
   assert.equal(route.route, 'fake')
   assert.equal(route.displayName, 'Fake Agent')
-  assert.deepEqual(route.capabilities.sort(), ['delete', 'fork', 'images', 'list', 'resume', 'stream'])
+  assert.deepEqual(route.capabilities.sort(), ['cancel', 'close', 'delete', 'fork', 'images', 'list', 'resume', 'stream'])
   assert.equal(route.sessions.length, 1)
   assert.equal(route.sessions[0].sessionId, 'fake-session-1')
   assert.equal(route.sessions[0].dshSessionId, sid, 'the inventory names the owning DSH Session')

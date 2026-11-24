@@ -7,8 +7,56 @@ import { createRoot } from 'react-dom/client'
 
 const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
 const delay = () => new Promise(resolve => setTimeout(resolve, 10))
+
+test('expanded live tool output refreshes when its revision changes', async () => {
+  let revision = 1
+  const env = await mount(url => {
+    if (url.includes('toolId=')) return response({ revision, output: revision === 1 ? 'started' : 'NEW COMPLETED OUTPUT' })
+    return response(url.includes('/state?') ? { runs: [{ ...run, status: revision === 1 ? 'running' : 'completed', tools: [{ ...run.tools[0], revision }] }] } : { routes: [] })
+  })
+  try {
+    await click('执行记录')
+    await act(async () => { const node = document.querySelector('section details'); node.open = true; node.dispatchEvent(new window.Event('toggle')); await delay() })
+    assert.match(document.body.textContent, /started/)
+    revision = 2; await click('刷新')
+    await act(async () => { await delay() })
+    assert.match(document.body.textContent, /NEW COMPLETED OUTPUT/)
+  } finally { await env.cleanup() }
+})
+
+test('slow inventory does not block activity state and historical config is read-only', async () => {
+  let finishInventory
+  const env = await mount(url => url.includes('/state?') ? response({ runs: [{ ...run, configOptions: [{ id: 'mode', type: 'select', currentValue: 'build' }] }], configuration: [{ route: 'a', displayName: 'Agent A', configurable: true, options: [{ id: 'mode', type: 'select', category: 'mode', currentValue: 'plan', options: [{ value: 'build' }, { value: 'plan' }] }] }] })
+    : new Promise(resolve => { finishInventory = resolve }))
+  try {
+    const button = [...document.querySelectorAll('button')].find(node => node.textContent === '执行记录')
+    await act(async () => { button.click(); await delay() })
+    assert.match(document.body.textContent, /修复模块/)
+    assert.match(document.body.textContent, /本轮配置（只读）/)
+    assert.equal(document.querySelectorAll('select').length, 1)
+    assert.equal(document.querySelector('select').value, 'plan')
+    finishInventory({ ok: true, json: async () => ({ routes: [] }) })
+  } finally { await env.cleanup() }
+})
+
+test('unsupported close is not shown', async () => {
+  const env = await mount(url => response(url.includes('/state?') ? { runs: [] } : { routes: [{ route: 'a', displayName: 'A', capabilities: [], sessions: [{ sessionId: 'one' }] }] }))
+  try { await click('会话'); assert.equal([...document.querySelectorAll('button')].some(node => node.textContent === '关闭'), false) }
+  finally { await env.cleanup() }
+})
+
+test('collapsed panel discovers a newly started run with lightweight passive polling', async () => {
+  let active = false
+  const env = await mount(url => response(url.includes('/state?') ? { runs: active ? [{ ...run, status: 'running' }] : [] } : { routes: [] }))
+  try {
+    active = true
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 1400)) })
+    assert.match(document.querySelector('[role=status]').textContent, /执行中/)
+    assert.equal(document.querySelector('section'), null)
+  } finally { await env.cleanup() }
+})
 async function mount(fetcher, sessionId = 'chat') {
-  const dom = new JSDOM('<!doctype html><html lang="zh"><body><div id="root"></div></body></html>', { url: 'http://localhost' })
+  const dom = new JSDOM('<!doctype html><html lang="zh"><body><div id="root"></div></body></html>', { url: 'http://localhost', pretendToBeVisual: true })
   globalThis.window = dom.window; globalThis.document = dom.window.document
   globalThis.IS_REACT_ACT_ENVIRONMENT = true; globalThis.fetch = fetcher
   let module
@@ -78,7 +126,7 @@ test('switching conversations ignores a stale response from the old conversation
 
 test('current badge is scoped correctly and duplicate mutations are disabled', async () => {
   let calls = 0; let resolveAction
-  const routes = [{ route: 'a', displayName: 'Agent A', capabilities: ['delete'], sessions: [
+  const routes = [{ route: 'a', displayName: 'Agent A', capabilities: ['delete', 'close'], sessions: [
     { sessionId: 'one', dshSessionId: 'chat', title: '当前标题' }, { sessionId: 'two', dshSessionId: 'other', title: '其他标题' }] }]
   const env = await mount(url => {
     if (url.includes('/close?')) { calls++; return new Promise(resolve => { resolveAction = resolve }) }

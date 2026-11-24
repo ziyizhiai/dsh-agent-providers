@@ -165,7 +165,7 @@ test('Stop settles a real ACP child within the configured acknowledgement bound'
   await assert.rejects(pending, error => error.name === 'AbortError')
   clearTimeout(timer)
   assert.equal(await registry.get('cancel', 'cancel'), undefined)
-  assert.equal((await activity.list('cancel'))[0].status, 'cancelled')
+  assert.equal((await activity.list('cancel'))[0].status, 'unknown')
   assert.equal(adapter.activeRuns.size, 0)
 })
 
@@ -184,7 +184,8 @@ test('session configuration is applied, persisted and reflected in the latest re
   const admin = new SessionAdmin({ adapter: f.adapter, registry: f.registry, current: f.adapter.current, resolveCwd: () => dir })
   await admin.configure({ dshSessionId: 'configure', route: 'configure', configId: 'mode', value: 'plan' })
   assert.equal((await f.registry.get('configure', 'configure')).sessionConfig.mode, 'plan')
-  assert.equal((await f.activity.list('configure'))[0].configOptions.find(option => option.id === 'mode').currentValue, 'plan')
+  assert.equal((await f.activity.list('configure'))[0].configOptions.find(option => option.id === 'mode').currentValue, 'build')
+  assert.equal((await admin.configuration('configure'))[0].options.find(option => option.id === 'mode').currentValue, 'plan')
   await f.turn([user('hello'), assistant(text(first)), user('next')])
 })
 

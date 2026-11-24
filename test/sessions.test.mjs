@@ -86,7 +86,7 @@ test('lists what the agent stores, with the owning DSH session attached', async 
   const [route] = inventory
   assert.equal(route.route, 'fake')
   assert.equal(route.displayName, 'Fake Agent')
-  assert.deepEqual(route.capabilities.sort(), ['delete', 'fork', 'images', 'list', 'resume', 'stream', 'switchModel'])
+  assert.deepEqual(route.capabilities.sort(), ['delete', 'fork', 'images', 'list', 'resume', 'stream'])
   assert.equal(route.sessions.length, 1)
   assert.equal(route.sessions[0].sessionId, 'fake-session-1')
   assert.equal(route.sessions[0].dshSessionId, sid, 'the inventory names the owning DSH Session')
@@ -126,8 +126,10 @@ test('forking rebinds the conversation to the branch', async () => {
   // The next turn continues on the branch, not the original.
   // The second turn must keep the same user-turn prefix for the binding to
   // still validate; only then does it resume on the branch.
+  const firstLog = (await readFile(prompts, 'utf8')).trim().split('\n').map((line) => JSON.parse(line)).at(-1)
+  const answer = `Echo: ${firstLog.text.slice(0, 60)}`
   await rm(prompts, { force: true })
-  await seed(adapter, sid, [user('hello'), { role: 'assistant', content: [{ type: 'text', text: 'reply' }] }, user('second')])
+  await seed(adapter, sid, [user('hello'), { role: 'assistant', content: [{ type: 'text', text: answer }] }, user('second')])
   const logged = (await readFile(prompts, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
   assert.equal(logged[0].sessionId, result.to, 'the next turn continues on the branch')
 })

@@ -18,8 +18,14 @@ DeepSeek account         ← already there
 opencode                 ← already there
 ```
 
-A strip under the composer also lists the agent's stored conversations and marks the one the
-open conversation is bound to.
+A workspace under the composer shows durable execution records, tool details, plan status,
+verified text-file results, and the agent's stored conversations. It keeps requested and confirmed
+model selections separate and supports Stop and native session select options.
+
+**Interaction/stability upgrade:** see [implementation, configuration, validation and limits](docs/INTERACTION_UPGRADE.md).
+The historical measurements below describe upstream agent versions; they are not claims that this
+working-copy upgrade was tested against every live agent. `npm test` includes new recovery and real
+React component regression coverage. No external tool call is ever re-executed by the harness.
 
 ## Supported agents
 

@@ -1,0 +1,97 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { readFile } from 'node:fs/promises'
+import { JSDOM } from 'jsdom'
+import React, { act } from 'react'
+import { createRoot } from 'react-dom/client'
+
+const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+const delay = () => new Promise(resolve => setTimeout(resolve, 10))
+async function mount(fetcher, sessionId = 'chat') {
+  const dom = new JSDOM('<!doctype html><html lang="zh"><body><div id="root"></div></body></html>', { url: 'http://localhost' })
+  globalThis.window = dom.window; globalThis.document = dom.window.document
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true; globalThis.fetch = fetcher
+  let module
+  window.__ModuleLoader__ = { load: definition => { module = definition.factory(name => { assert.equal(name, 'react'); return React }) } }
+  new Function(source)()
+  let render
+  module.apply({ effect: fn => fn(), locale: { register: () => () => {} }, slots: { inject: (_name, fn) => fn(), register: (_meta, fn) => { render = fn } } })
+  const root = createRoot(document.getElementById('root'))
+  await act(async () => { root.render(render({ sessionId })); await delay() })
+  return { root, dom, render, cleanup: async () => { await act(async () => root.unmount()); dom.window.close(); delete globalThis.window; delete globalThis.document; delete globalThis.fetch } }
+}
+const response = (body, status = 200) => Promise.resolve({ ok: status === 200, status, json: async () => body })
+async function click(label) {
+  const button = [...document.querySelectorAll('button')].find(node => node.textContent === label)
+  assert.ok(button, `button missing: ${label}`)
+  await act(async () => { button.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); await delay() })
+}
+const run = { id: 'run', route: 'a', title: '修复模块', displayName: 'Agent A', cwd: '/project', status: 'completed', startedAt: 1000, endedAt: 2000, updatedAt: 2000,
+  requestedModel: 'choice', actualModel: 'actual', configOptions: [], notices: [],
+  plans: [{ id: 'p', content: '测试模块', status: 'completed' }],
+  tools: [{ id: 't', title: '运行测试', status: 'completed', locations: [] }],
+  artifacts: [{ id: 'f', path: 'result.txt', status: 'verified' }] }
+
+test('real component displays structured activity, lazily expands output, and previews safely as text', async () => {
+  const calls = []
+  const env = await mount(url => {
+    calls.push(url)
+    if (url.includes('toolId=')) return response({ output: 'PASS 3 tests' })
+    if (url.includes('artifactId=')) return response({ path: 'result.txt', text: '<script>bad()</script>', changedSinceVerified: true })
+    return response(url.includes('/state?') ? { runs: [run] } : { routes: [] })
+  })
+  try {
+    await click('执行记录')
+    assert.match(document.body.textContent, /实际模型: actual/)
+    assert.match(document.body.textContent, /测试模块/)
+    assert.equal(calls.some(url => url.includes('toolId=')), false)
+    await act(async () => { const details = document.querySelector('section details'); details.open = true; details.dispatchEvent(new window.Event('toggle')); await delay() })
+    assert.match(document.body.textContent, /PASS 3 tests/)
+    await click('查看文件')
+    assert.match(document.body.textContent, /发生变化/)
+    assert.match(document.body.textContent, /<script>bad\(\)<\/script>/)
+    assert.equal(document.querySelector('script'), null)
+  } finally { await env.cleanup() }
+})
+
+test('refresh failure retains the last successful data and shows a visible error', async () => {
+  let failure = false
+  const env = await mount(url => failure ? response({ error: { message: 'offline' } }, 500) : response(url.includes('/state?') ? { runs: [run] } : { routes: [] }))
+  try {
+    await click('执行记录'); failure = true; await click('刷新')
+    assert.match(document.body.textContent, /保留上次数据/); assert.match(document.body.textContent, /修复模块/)
+  } finally { await env.cleanup() }
+})
+
+test('switching conversations ignores a stale response from the old conversation', async () => {
+  let resolveOld
+  const env = await mount(url => {
+    if (url.includes('dshSessionId=old')) return new Promise(resolve => { resolveOld = resolve })
+    return response(url.includes('/state?') ? { runs: [{ ...run, title: '新会话' }] } : { routes: [] })
+  }, 'old')
+  try {
+    await act(async () => { env.root.render(env.render({ sessionId: 'new' })); await delay() })
+    await act(async () => { resolveOld({ ok: true, json: async () => ({ runs: [{ ...run, title: '旧响应' }] }) }); await delay() })
+    await click('执行记录'); assert.match(document.body.textContent, /新会话/); assert.doesNotMatch(document.body.textContent, /旧响应/)
+  } finally { await env.cleanup() }
+})
+
+test('current badge is scoped correctly and duplicate mutations are disabled', async () => {
+  let calls = 0; let resolveAction
+  const routes = [{ route: 'a', displayName: 'Agent A', capabilities: ['delete'], sessions: [
+    { sessionId: 'one', dshSessionId: 'chat', title: '当前标题' }, { sessionId: 'two', dshSessionId: 'other', title: '其他标题' }] }]
+  const env = await mount(url => {
+    if (url.includes('/close?')) { calls++; return new Promise(resolve => { resolveAction = resolve }) }
+    return response(url.includes('/state?') ? { runs: [] } : { routes })
+  })
+  try {
+    await click('会话')
+    assert.equal([...document.querySelectorAll('span')].filter(node => node.textContent === '当前会话').length, 1)
+    assert.match(document.body.textContent, /已关联/)
+    await click('关闭')
+    assert.equal(document.querySelector('button:disabled')?.textContent, '处理中…')
+    assert.equal(calls, 1)
+    await act(async () => { resolveAction({ ok: true, json: async () => ({ closed: true }) }); await delay() })
+    assert.match(document.body.textContent, /操作完成/)
+  } finally { await env.cleanup() }
+})

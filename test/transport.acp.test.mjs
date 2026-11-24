@@ -188,7 +188,9 @@ test('reads capabilities from the agent, not from a guess', async () => {
   assert.equal(transport.capabilities.has(CAPABILITY.RESUME), true)
   assert.equal(transport.capabilities.has(CAPABILITY.LIST), true)
   assert.equal(transport.capabilities.has(CAPABILITY.FORK), true)
-  assert.equal(transport.capabilities.has(CAPABILITY.SWITCH_MODEL), true)
+  assert.equal(transport.capabilities.has(CAPABILITY.SWITCH_MODEL), false)
+  const session = await transport.create()
+  assert.equal(session.capabilities.has(CAPABILITY.SWITCH_MODEL), true)
   assert.equal(transport.capabilities.has(CAPABILITY.IMAGES), true)
 })
 
@@ -237,7 +239,7 @@ test('selectModel applies through the session config option', async () => {
   const session = await transport.create({ cwd })
   await session.selectModel('fake/sonnet')
   assert.equal(session.modelOption.currentValue, 'fake/sonnet')
-  await assert.rejects(session.selectModel('nope/nope'), /unknown model/)
+  await assert.rejects(session.selectModel('nope/nope'), /invalid value/)
 })
 
 test('images reach the agent when it advertises image prompts', async () => {

@@ -17,8 +17,9 @@ DeepSeek 账号          ← 原有
 opencode               ← 原有
 ```
 
-Composer 下方还有一条 **Agent 会话** 栏（默认收起，点"管理"展开）：列出该 agent 存下来的
-会话，标注哪一条绑在当前对话上，可以关闭/删除，见 [会话管理](#会话管理m2)。
+Composer 下方升级为 **Agent 工作区**：支持持久执行记录、工具详情、计划状态、成果文件验证与文本预览、停止运行和原生会话选项，并保留会话管理。
+
+本轮升级的配置、验证与边界见 [交互与稳定性升级说明](docs/INTERACTION_UPGRADE.md)。下文历史实测记录对应上游 Agent 版本，不代表本轮已逐一验证全部真实 Agent；新增恢复和真实 React 组件回归可通过 npm test 执行。
 
 和现有的 `opencode` 组**完全同构**：`/model`、composer 模型席、`agent-default-model`、
 `subagent-model-selection-settings.allowedModels` 全都照常认它。

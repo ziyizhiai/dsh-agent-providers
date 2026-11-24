@@ -327,7 +327,7 @@ test('one turn yields a well-formed assistant message', async () => {
   const reasoning = ends.find((chunk) => chunk.block.type === 'reasoning').block.text
   assert.match(reasoning, /thinking…/)
   assert.match(reasoning, /→ Read src\/app\.ts/)
-  assert.match(reasoning, /◻ inspect the module/)
+  assert.match(reasoning, /✓ inspect the module/)
 
   const usage = chunks.find((chunk) => chunk.type === 'usage')
   // Measured against the real agent: `inputTokens` already excludes the cached
@@ -398,14 +398,14 @@ test('a second turn resumes the same conversation and sends only the delta', asy
     continuity: 'resume',
   })
   const first = [user('first question')]
-  await turn(adapter, sid, first)
+  const firstChunks = await turn(adapter, sid, first)
 
   const binding = await registry.get(sid, 'fake')
   assert.equal(binding.externalSessionId, 'fake-session-1')
   assert.equal(binding.sentUserCount, 1)
 
   await rm(prompts, { force: true })
-  const second = [...first, assistant('first answer'), user('second question')]
+  const second = [...first, assistant(texts(firstChunks)), user('second question')]
   const chunks = await turn(adapter, sid, second)
 
   const logged = await promptLog()
@@ -536,7 +536,7 @@ test('a CLI transport works through the same adapter', async () => {
     await rm(prompts, { force: true })
     const second = await collect(adapter.stream({
       provider: 'fake', model: 'deep', sessionId: sid,
-      messages: [user('hello cli'), assistant('reply'), user('second')],
+      messages: [user('hello cli'), assistant(texts(first)), user('second')],
     }))
     assert.match(texts(second), /second/)
     const logged = await promptLog()

@@ -37,6 +37,11 @@ await writeFile(join(root, 'result.txt'), 'PASS: UI fixture preview\n')
 const fixture = await activity.begin({ dshSessionId: sid, route: 'demo', displayName: '测试 Agent', cwd: root, title: '成果预览测试样例', requestedModel: 'fake/opus', actualModel: 'fake/opus' })
 activity.accept(fixture, { type: 'tool', id: 'edit', title: '测试样例：写入结果文件', kind: 'edit', status: 'completed', locations: [{ path: 'result.txt' }], rawOutput: 'PASS: UI fixture preview' })
 await activity.verify(fixture); await activity.settle(fixture, 'completed')
+if (process.env.UI_RECOVERY_FIXTURE === '1') {
+  const id = await activity.begin({ dshSessionId: sid, route: 'demo', displayName: '测试 Agent', cwd: root, title: '结果未知恢复测试样例' })
+  activity.accept(id, { type: 'tool', id: 'pending-edit', title: '测试样例：未确认写入', kind: 'edit', status: 'in_progress', locations: [{ path: 'result.txt' }] })
+  await activity.settle(id, 'unknown', { code: 'EXECUTION_UNKNOWN', message: 'Synthetic unknown result' })
+}
 let failNext = false
 const html = `<!doctype html><html lang="zh"><meta charset="utf-8"><title>Agent 工作区联调</title><body style="margin:40px;font-family:system-ui;background:#f7f8fa;color:#252a32"><main style="max-width:900px;margin:auto"><h2>插件交互验收 · 测试样例</h2><p>真实插件组件与真实 ACP 子进程；样例数据不代表模型推理效果。</p><button id="start">启动测试回合</button><button id="fail">模拟下一次刷新失败</button><div id="root" style="margin-top:20px;background:white"></div></main><script src="/react.js"></script><script src="/react-dom.js"></script><script>window.__ModuleLoader__={load(d){const plugin=d.factory(n=>window.React);let render;plugin.apply({effect:f=>f(),locale:{register:()=>()=>{}},slots:{inject:(n,f)=>f(),register:(m,f)=>{render=f}}});window.ReactDOM.createRoot(document.getElementById('root')).render(render({sessionId:'${sid}'}))}};document.getElementById('start').onclick=()=>fetch('/start',{method:'POST'});document.getElementById('fail').onclick=()=>fetch('/fail',{method:'POST'});</script><script src="/client.js"></script></body></html>`
 // React 18 UMD is isolated test-only; the plugin itself stays on the host's React.

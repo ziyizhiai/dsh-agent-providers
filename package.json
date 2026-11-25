@@ -21,6 +21,7 @@
     "docs/DETAIL.zh.md",
     "docs/preview.svg",
     "docs/transport-contract.md",
+    "docs/RECOVERY_WORKFLOW.md",
     "docs/RELIABILITY_UPGRADE.md",
     "docs/INTERACTION_UPGRADE.md",
     "README.md",
@@ -70,6 +71,7 @@
   },
   "scripts": {
     "test:package": "node scripts/package-smoke.mjs",
+    "test:recovery": "node --test test/recovery.test.mjs",
     "test:reliability": "node --test test/reliability.test.mjs",
     "test": "node --test test/*.test.mjs",
     "test:ui": "node --test test/client.test.mjs",

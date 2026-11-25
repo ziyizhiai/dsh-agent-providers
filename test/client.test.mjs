@@ -8,6 +8,44 @@ import { createRoot } from 'react-dom/client'
 const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
 const delay = () => new Promise(resolve => setTimeout(resolve, 10))
 
+test('unknown execution exposes review then acknowledgement without a retry action', async () => {
+  let checked = false; let acknowledged = false; const mutations = []
+  const env = await mount(url => {
+    if (url.includes('/inspect?')) { checked = true; mutations.push('inspect'); return response({ persistence: { saved: true } }) }
+    if (url.includes('/acknowledge?')) { acknowledged = true; mutations.push('acknowledge'); return response({ persistence: { saved: true } }) }
+    return response(url.includes('/state?') ? { runs: [{ ...run, status: 'unknown', review: checked ? { checkedAt: 123, evidence: [{ path: 'result.txt', state: 'exists' }], ...(acknowledged ? { acknowledgedAt: 456 } : {}) } : undefined }] } : { routes: [] })
+  })
+  try {
+    await click('执行记录')
+    assert.match(document.body.textContent, /上一轮结果未知/)
+    assert.equal([...document.querySelectorAll('button')].some(button => button.textContent === '我已核对，允许后续回合'), false)
+    await click('核对执行证据')
+    assert.match(document.body.textContent, /文件存在/)
+    await click('我已核对，允许后续回合')
+    assert.match(document.body.textContent, /已人工核对（不代表任务成功）/)
+    assert.match(document.body.textContent, /执行结果未知/)
+    assert.deepEqual(mutations, ['inspect', 'acknowledge'])
+  } finally { await env.cleanup() }
+})
+test('diagnostics and save retry explicitly avoid reexecution and failure codes are localized', async () => {
+  let action
+  const env = await mount(url => {
+    if (url.includes('diagnostics=1')) return response({ version: 1, runs: [{ status: 'completed' }] })
+    if (url.includes('/retry-save?')) { action = 'retry-save'; return response({ saved: false }) }
+    return response(url.includes('/state?') ? { runs: [{ ...run, persistenceError: 'disk', failure: { code: 'REVIEW_REQUIRED', message: 'english fallback' } }] } : { routes: [] })
+  })
+  try {
+    await click('执行记录')
+    assert.match(document.body.textContent, /请先核对上一轮/)
+    await click('仅重试保存')
+    assert.equal(action, 'retry-save'); assert.match(document.body.textContent, /不要重跑已执行任务/)
+    await click('查看诊断')
+    assert.ok(document.querySelector('[data-diagnostic]'))
+    assert.match(document.body.textContent, /不含对话正文/)
+    assert.ok([...document.querySelectorAll('button')].some(button => button.textContent === '导出诊断JSON'))
+  } finally { await env.cleanup() }
+})
+
 test('expanded live tool output refreshes when its revision changes', async () => {
   let revision = 1
   const env = await mount(url => {

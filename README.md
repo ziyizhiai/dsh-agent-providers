@@ -22,6 +22,8 @@ A workspace under the composer shows durable execution records, tool details, pl
 verified text-file results, and the agent's stored conversations. It keeps requested and confirmed
 model selections separate and supports Stop and native session select options.
 
+**Recovery workflow:** [review unknown execution, acknowledge without rerunning, check connection and export diagnostics](docs/RECOVERY_WORKFLOW.md).
+
 **Reliability follow-up:** [capabilities, confirmed configuration, Stop outcomes, state ownership and onboarding SOP](docs/RELIABILITY_UPGRADE.md).
 Runtime gates are conservative; historical agent measurements are not capability guarantees. Current session settings are distinct from read-only turn history.
 
